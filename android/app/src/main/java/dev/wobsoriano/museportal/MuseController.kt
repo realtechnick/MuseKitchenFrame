@@ -47,6 +47,10 @@ import dev.wobsoriano.museportal.audio.Chime
 import dev.wobsoriano.museportal.audio.Microphone
 import dev.wobsoriano.museportal.audio.Speaker
 import dev.wobsoriano.museportal.audio.call.PortalAudio
+import dev.wobsoriano.museportal.printer.Pm230Printer
+import dev.wobsoriano.museportal.printer.PrintAlign
+import dev.wobsoriano.museportal.printer.PrintFormat
+import dev.wobsoriano.museportal.printer.PrintJob
 import dev.wobsoriano.museportal.call.CallGate
 import dev.wobsoriano.museportal.ble.GattPeripheral
 import dev.wobsoriano.museportal.ble.StandardGattPeripheral
@@ -142,6 +146,10 @@ data class MuseState(
     val muted: Boolean = false,
     /** The recent announcements the replay button can play again, newest first. */
     val announcements: List<AnnouncementInfo> = emptyList(),
+    /** The PM230 printer's pairing state, for the Settings section. */
+    val printerStatus: String = "",
+    /** The last print's outcome line, for the Settings section. */
+    val printerLast: String = "",
     /** Seconds of recording left before the cap, while a question is being captured; else null. */
     val recordingLeftS: Int? = null,
     /** The fraction of the capture cap left (1 = just started), for the shrinking line; else null. */
@@ -287,6 +295,7 @@ class MuseController(private val context: Context) {
     network.start()
     supervisor = scope.launch { supervise() }
     heyMuse.start(settings.wakeEnabled, asking = busy)
+    refreshPrinterStatus()
   }
 
   @Synchronized
@@ -472,7 +481,40 @@ class MuseController(private val context: Context) {
   }
 
   /** Network facts may have changed after a permission grant. */
-  fun refreshConfig() = sendConfig()
+  fun refreshConfig() {
+    sendConfig()
+    refreshPrinterStatus()
+  }
+
+  /** The PM230 thermal printer paired to this tablet, for printer.print / printer.probe. */
+  private val printer = Pm230Printer(context)
+
+  /** Refresh the Settings printer line (permission / pairing state). Cheap: no connect. */
+  fun refreshPrinterStatus() {
+    _state.update { it.copy(printerStatus = printer.statusText()) }
+  }
+
+  /** The Settings test print: one canned slip through the full pipeline. */
+  fun testPrint() {
+    scope.launch {
+      try {
+        val (job, _) =
+            PrintJob.buildTextJob(
+                "MUSE TABLET",
+                "Hello from Secundo! The PM230 is paired with this tablet and printing. " +
+                    "Urgent reminders, recipes and labels will land here.",
+                PrintAlign.Left,
+                PrintFormat.DEFAULT_DENSITY)
+        val name = printer.send(job)
+        _state.update {
+          it.copy(printerLast = "Test print sent to $name · ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}")
+        }
+      } catch (e: CommandFailed) {
+        _state.update { it.copy(printerLast = "Test print failed: ${e.message}") }
+      }
+      refreshPrinterStatus()
+    }
+  }
 
   fun pair() {
     core?.pairStart()
@@ -686,6 +728,23 @@ class MuseController(private val context: Context) {
   private fun need(args: String, key: String): String =
       arg(args, key).ifEmpty { throw CommandFailed("missing '$key'") }
 
+  /** An optional integer argument, validated into its range. */
+  private fun intArg(args: String, key: String, default: Int, min: Int, max: Int): Int {
+    val raw = arg(args, key)
+    if (raw.isEmpty()) return default
+    val v = raw.toIntOrNull() ?: throw CommandFailed("bad '$key'")
+    if (v !in min..max) throw CommandFailed("'$key' out of range")
+    return v
+  }
+
+  private fun alignArg(args: String): PrintAlign =
+      when (arg(args, "align").lowercase()) {
+        "", "left" -> PrintAlign.Left
+        "center" -> PrintAlign.Center
+        "right" -> PrintAlign.Right
+        else -> throw CommandFailed("bad 'align'")
+      }
+
   /** The command set this app registers, mirroring the ESP32 gadget's surface. */
   private fun gadgetCommands(): List<Command> =
       listOf(
@@ -773,6 +832,55 @@ class MuseController(private val context: Context) {
                     buildJsonObject { put("asked", true) }
                   },
           ),
+          Command(
+              name = "printer.print",
+              description = "Print a text slip on the Nelko PM230 thermal printer paired to this tablet — for urgent reminders, recipes and labels worth having on paper. Failures (not paired, unreachable, mid-send) are reported back.",
+              required = listOf(Param("text", ParamType.String, "The text to print; word-wrapped, paragraphs split on newlines")),
+              optional =
+                  listOf(
+                      Param("title", ParamType.String, "A bold header line above the text"),
+                      Param("align", ParamType.String, "left (default), center or right — positions the whole text block on the label"),
+                      Param("density", ParamType.Integer, "Print density 1-15, default 10"),
+                      Param("copies", ParamType.Integer, "Copies 1-3, default 1"),
+                  ),
+              timeout = 60.seconds,
+              handler =
+                  Handler { args, _ ->
+                    val text = need(args, "text")
+                    val title = arg(args, "title").ifEmpty { null }
+                    val align = alignArg(args)
+                    val density = intArg(args, "density", PrintFormat.DEFAULT_DENSITY, 1, 15)
+                    val copies = intArg(args, "copies", 1, 1, 3)
+                    val (job, heightMm) = PrintJob.buildTextJob(title, text, align, density)
+                    var name = ""
+                    repeat(copies) { name = printer.send(job) }
+                    _state.update {
+                      it.copy(
+                          printerLast = "Printed a ${heightMm.toInt()} mm slip · ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}")
+                    }
+                    refreshPrinterStatus()
+                    buildJsonObject {
+                      put("printed", true)
+                      put("bytes", job.size)
+                      put("height_mm", heightMm)
+                      put("printer", name)
+                    }
+                  },
+          ),
+          Command(
+              name = "printer.probe",
+              description = "Check the PM230 printer paired to this tablet is reachable: opens its Bluetooth link and closes it again, printing nothing.",
+              timeout = 60.seconds,
+              handler =
+                  Handler { _, _ ->
+                    val name = printer.probe()
+                    refreshPrinterStatus()
+                    buildJsonObject {
+                      put("reachable", true)
+                      put("printer", name)
+                    }
+                  },
+          ),
       )
 
   private fun healthJson(): JsonObject {
@@ -797,6 +905,7 @@ class MuseController(private val context: Context) {
       put("last_mic", Microphone.lastStats)
       put("muted", s.muted)
       put("announcements", s.announcements.size)
+      put("printer_paired", printer.isPaired())
     }
   }
 

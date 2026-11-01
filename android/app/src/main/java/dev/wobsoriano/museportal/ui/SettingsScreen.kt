@@ -65,6 +65,8 @@ interface SettingsActions {
 
   fun testVoice()
 
+  fun testPrint()
+
   fun rename(name: String)
 
   fun saveToken(token: String)
@@ -109,6 +111,7 @@ fun SettingsScreen(state: MuseState, canOverlay: Boolean, avatar: AvatarLoad, av
             }
             Section("Voice", "How Muse sounds when it answers.") { VoiceSettings(state, actions) }
             Section("Device", "How this Portal shows up in Muse.") { DeviceSettings(state, actions) }
+            Section("Printer", "The Nelko PM230 paired to this tablet, for reminders and recipes on paper.") { PrinterSettings(state, actions) }
             Section("About", null) { About(state, avatar, avatarDir, actions) }
           }
     }
@@ -250,6 +253,13 @@ private fun DeviceSettings(state: MuseState, actions: SettingsActions) {
         dismissButton = { Link("Cancel", { confirmUnpair = false }) },
         containerColor = Palette.Raised)
   }
+}
+
+@Composable
+private fun PrinterSettings(state: MuseState, actions: SettingsActions) {
+  Fact("Printer", state.printerStatus.ifEmpty { "Checking…" })
+  if (state.printerLast.isNotEmpty()) Fact("Last print", state.printerLast)
+  Pill("Test print", actions::testPrint, primary = false)
 }
 
 @Composable

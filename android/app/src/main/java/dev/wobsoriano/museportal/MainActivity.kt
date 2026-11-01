@@ -64,7 +64,7 @@ class MainActivity : ComponentActivity() {
     MuseService.start(this)
     applyExtras(intent)
     val missing =
-        listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION).filter {
+        listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.BLUETOOTH_CONNECT).filter {
           checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
     if (missing.isNotEmpty()) permissions.launch(missing.toTypedArray())
@@ -182,6 +182,8 @@ class MainActivity : ComponentActivity() {
         override fun setVoice(name: String?, rate: Float) = muse.setVoice(name, rate)
 
         override fun testVoice() = muse.testVoice()
+
+        override fun testPrint() = muse.testPrint()
 
         override fun rename(name: String) = muse.rename(name)
 
