@@ -843,7 +843,7 @@ class MuseController(private val context: Context) {
                       Param("density", ParamType.Integer, "Print density 1-15, default 10"),
                       Param("copies", ParamType.Integer, "Copies 1-3, default 1"),
                   ),
-              timeout = 60.seconds,
+              timeout = 120.seconds,
               handler =
                   Handler { args, _ ->
                     val text = need(args, "text")
@@ -870,7 +870,7 @@ class MuseController(private val context: Context) {
           Command(
               name = "printer.probe",
               description = "Check the PM230 printer paired to this tablet is reachable: opens its Bluetooth link and closes it again, printing nothing.",
-              timeout = 60.seconds,
+              timeout = 90.seconds,
               handler =
                   Handler { _, _ ->
                     val name = printer.probe()

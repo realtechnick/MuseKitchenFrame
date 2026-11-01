@@ -20,6 +20,26 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
+ * How long to keep the link open after the last byte is written, so the host stack
+ * can actually deliver the job. Android's flush() returns when the bytes sit in the
+ * *host* Bluetooth stack, not in the printer; closing the socket discards whatever
+ * the stack has not yet sent, and the printer prints a clean prefix of the job and
+ * stops (field-proven 2026-11-01: jobs past ~23 KB truncated, identical jobs at the
+ * identical line). The reference driver avoids this on desktop by draining
+ * out_waiting; Android exposes no equivalent, so the hold is sized by the job —
+ * a deliberately pessimistic drain rate, floored for small jobs, capped so a huge
+ * job cannot pin the command open forever.
+ */
+internal fun drainHoldMs(jobBytes: Int): Long {
+  val sized = jobBytes.toLong() * 1_000L / DRAIN_BYTES_PER_SEC
+  return sized.coerceIn(SETTLE_MS, DRAIN_HOLD_CAP_MS)
+}
+
+internal const val SETTLE_MS = 5_000L
+internal const val DRAIN_BYTES_PER_SEC = 1_800L
+internal const val DRAIN_HOLD_CAP_MS = 90_000L
+
+/**
  * The one class that touches hardware: sends a built TSPL job to the Nelko PM230 over
  * Bluetooth Classic SPP, a port of the reference driver's port.py.
  *
@@ -30,11 +50,13 @@ import kotlinx.coroutines.withContext
  * which is the truth). Jobs serialise on a mutex: two overlapping prints must queue,
  * never interleave bytes on the one link.
  *
- * The trap the whole class is shaped around (paid for in wasted paper by the driver's
- * author, and confirmed in its research notes): Bluetooth SPP transmits asynchronously
- * behind flush(). Closing the socket when flush() returns truncates the job — the
- * printer accepts every byte and prints *nothing*. So send() drains, then holds the
- * link open through a settle window that any chatter from the printer extends.
+ * Two traps shape the class, both paid for in wasted paper. The driver's: Bluetooth
+ * SPP transmits asynchronously behind flush(), so closing on flush() prints nothing.
+ * Ours (2026-11-01): a fixed short settle still closes too early on Android, because
+ * the bytes are then only in the host stack — so the settle window scales with the
+ * job size; see [drainHoldMs]. And a printer that has just finished a job refuses an
+ * immediate reconnect while its stack tears the old link down, so connect retries
+ * once after a short pause before reporting "printer unreachable".
  */
 class Pm230Printer(private val context: Context) {
   private val mutex = Mutex()
@@ -106,26 +128,33 @@ class Pm230Printer(private val context: Context) {
           } catch (e: IOException) {
             throw CommandFailed("print failed mid-send — may have printed partially")
           }
-          settle(socket)
+          settle(socket, job.size)
         }
         device.name ?: PRINTER_NAME
       }
 
   /**
-   * Hold the link open while the printer works. Any byte back from the printer starts
-   * a fresh settle window (it talks while printing); the whole hold is capped so a
-   * chatty printer cannot pin the command open past its timeout.
+   * Hold the link open until the job has had time to drain out of the host stack and
+   * the printer has gone quiet. The window opens at [drainHoldMs] for the job size;
+   * any byte back from the printer counts as still-working and restarts a short quiet
+   * window, with a hard cap so a chatty printer cannot pin the command open.
    */
-  private fun settle(socket: BluetoothSocket) {
+  private fun settle(socket: BluetoothSocket, jobBytes: Int) {
     val input = socket.inputStream
     val buf = ByteArray(256)
-    val cap = SystemClock.elapsedRealtime() + SETTLE_CAP_MS
-    var deadline = SystemClock.elapsedRealtime() + SETTLE_MS
-    while (SystemClock.elapsedRealtime() < deadline) {
+    val started = SystemClock.elapsedRealtime()
+    val drainUntil = started + drainHoldMs(jobBytes)
+    val cap = drainUntil + CHATTER_CAP_MS
+    var lastHeard = started
+    while (true) {
+      val now = SystemClock.elapsedRealtime()
+      val drained = now >= drainUntil
+      val quiet = now - lastHeard >= QUIET_MS
+      if ((drained && quiet) || now >= cap) return
       try {
         if (input.available() > 0) {
           input.read(buf)
-          deadline = minOf(SystemClock.elapsedRealtime() + SETTLE_MS, cap)
+          lastHeard = SystemClock.elapsedRealtime()
         } else {
           Thread.sleep(SETTLE_POLL_MS)
         }
@@ -136,34 +165,53 @@ class Pm230Printer(private val context: Context) {
   }
 
   /** Connect on the IO dispatcher, run [block] with the open socket, always close. */
-  @SuppressLint("MissingPermission")
   private suspend fun <T> connect(device: BluetoothDevice, block: (BluetoothSocket) -> T): T =
       withContext(Dispatchers.IO) {
-        val socket =
-            try {
-              device.createRfcommSocketToServiceRecord(SPP_UUID)
-            } catch (e: Exception) {
-              throw CommandFailed("printer unreachable")
-            }
+        val socket = openSocket(device)
         try {
-          runCatching { adapter()?.cancelDiscovery() }
-          try {
-            socket.connect()
-          } catch (e: IOException) {
-            throw CommandFailed("printer unreachable")
-          }
           block(socket)
         } finally {
           runCatching { socket.close() }
         }
       }
 
+  /**
+   * Create and connect a socket, retrying once after a short pause: a printer that
+   * has just finished a job (or whose previous link is still closing) refuses the
+   * first attempt and accepts the second — field-proven 2026-11-01, when an immediate
+   * back-to-back print reported "printer unreachable" and the retry succeeded.
+   */
+  @SuppressLint("MissingPermission")
+  private fun openSocket(device: BluetoothDevice): BluetoothSocket {
+    var lastError: IOException? = null
+    for (attempt in 1..CONNECT_ATTEMPTS) {
+      val socket =
+          try {
+            device.createRfcommSocketToServiceRecord(SPP_UUID)
+          } catch (e: Exception) {
+            throw CommandFailed("printer unreachable")
+          }
+      try {
+        runCatching { adapter()?.cancelDiscovery() }
+        socket.connect()
+        return socket
+      } catch (e: IOException) {
+        lastError = e
+        runCatching { socket.close() }
+        if (attempt < CONNECT_ATTEMPTS) Thread.sleep(CONNECT_RETRY_MS)
+      }
+    }
+    throw CommandFailed("printer unreachable")
+  }
+
   private companion object {
     const val PRINTER_NAME = "PM230"
     val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     const val CHUNK_BYTES = 1024
-    const val SETTLE_MS = 5_000L
-    const val SETTLE_CAP_MS = 30_000L
+    const val QUIET_MS = 2_000L
+    const val CHATTER_CAP_MS = 30_000L
     const val SETTLE_POLL_MS = 50L
+    const val CONNECT_ATTEMPTS = 2
+    const val CONNECT_RETRY_MS = 3_000L
   }
 }
