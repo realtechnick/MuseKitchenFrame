@@ -5,17 +5,28 @@ name: Build APKs
 # debug keystore (stored as the DEBUG_KEYSTORE_B64 Actions secret) so APK
 # updates always install in place on the tablet without wiping app data
 # or the Muse pairing.
+#
+# Each successful build also publishes a GitHub Release tagged v<versionName>
+# (from android/app/build.gradle.kts) with the gadget APK attached, so the
+# tablet can always fetch the current build from one permanent public URL.
+# The release notes are the message of the newest commit that touched
+# build.gradle.kts — the version-bump commit, which carries the changelog.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -68,3 +79,20 @@ jobs:
             android/app/build/outputs/apk/debug/app-debug.apk
             android/probe/build/outputs/apk/debug/probe-debug.apk
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts)"
+          TAG="v$VERSION"
+          APK="portal-muse-gadget-$TAG.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "$APK"
+          NOTES="$(git log -1 --format=%B -- android/app/build.gradle.kts)"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+            gh release edit "$TAG" --title "$TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" "$APK" --title "$TAG" --notes "$NOTES"
+          fi
+          echo "Published $TAG with $APK"
