@@ -297,13 +297,33 @@ private fun StatusContent(state: MuseState) {
       Box(Modifier.width(130.dp).height(3.dp).background(GoldLine))
       Spacer(Modifier.height(22.dp))
     }
-    Text(
-        state.hubBody.ifBlank { defaultStatusBody(state) },
-        fontFamily = HubFont,
-        fontSize = 26.sp,
-        lineHeight = 39.sp,
-        color = WarmWhite,
-        textAlign = TextAlign.Center)
+    // The body is plain lines, with one piece of markup: a line starting with "# " is a
+    // headline — gold, black weight, a touch larger. Everything else is body text, blank
+    // lines are breathing room. (Boss asked for colored headlines, 2026-11-02.)
+    val body = state.hubBody.ifBlank { defaultStatusBody(state) }
+    body.split("\n").forEach { line ->
+      when {
+        line.isBlank() -> Spacer(Modifier.height(14.dp))
+        line.startsWith("# ") ->
+            Text(
+                line.removePrefix("# ").uppercase(),
+                fontFamily = HubFont,
+                fontWeight = FontWeight.Black,
+                fontSize = 30.sp,
+                lineHeight = 36.sp,
+                letterSpacing = 3.sp,
+                color = GoldLine,
+                textAlign = TextAlign.Center)
+        else ->
+            Text(
+                line,
+                fontFamily = HubFont,
+                fontSize = 26.sp,
+                lineHeight = 39.sp,
+                color = WarmWhite,
+                textAlign = TextAlign.Center)
+      }
+    }
   }
 }
 
