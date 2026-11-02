@@ -28,9 +28,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import dev.wobsoriano.museportal.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+/** The hub home screen's rounded typeface, bundled so the big screen matches its design. */
+val HubFont =
+    FontFamily(
+        Font(R.font.nunito_regular, FontWeight.Normal),
+        Font(R.font.nunito_bold, FontWeight.Bold),
+        Font(R.font.nunito_black, FontWeight.Black),
+    )
 
 object Palette {
   val Ground = Color(0xFF0B0F14)

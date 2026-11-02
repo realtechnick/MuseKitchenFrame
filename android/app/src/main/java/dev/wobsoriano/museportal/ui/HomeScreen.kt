@@ -1,28 +1,27 @@
 package dev.wobsoriano.museportal.ui
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,12 +33,13 @@ import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,6 +47,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.lerp
@@ -73,6 +75,7 @@ import dev.wobsoriano.muse.voice.CallPhase
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 /** What the turn has to say: the question as heard and the answer so far, or why it failed. [live]: captions of a call, newest words last. */
 data class TurnText(val heard: String, val answer: String, val failed: Boolean, val complete: Boolean = true, val live: Boolean = false)
@@ -93,10 +96,19 @@ val AskState.turnText: TurnText?
         else -> null
       }
 
+// The hub's bronze-and-gold dressing (Boss's design, approved 2026-11-02).
+private val BronzeTop = Color(0xFF3F2A10)
+private val BronzeBottom = Color(0xFF1E1306)
+private val BronzeGlow = Color(0xFF8A6428)
+private val GoldLine = Color(0xFFF0C66E)
+private val WarmWhite = Color(0xFFFFF6E6)
+
 /**
- * The screen a room sees: the character (or the orb) in the middle, one line beneath it, and the turn's
- * words under that. Tapping the character asks; the rest of the screen ignores taps, so waking the
- * screen or brushing it doesn't start a recording. A call has its own button to hang up.
+ * The hub home screen: a clock and the framed character on the left third, a status panel on
+ * the right two-thirds. The panel shows Muse's standing status (display.set_status) at rest,
+ * and the turn's captions while a question, an answer or a call is live. A pushed card still
+ * takes the whole screen, clean. The controls live at the bottom of the left column, so no
+ * button ever sits over the clock or the panel.
  */
 @Composable
 fun HomeScreen(
@@ -110,64 +122,287 @@ fun HomeScreen(
     onToggleMute: () -> Unit = {},
     onStartCall: () -> Unit = {},
 ) {
-  val mood = state.mood
   var showReplays by remember { mutableStateOf(false) }
-  Box(Modifier.fillMaxSize()) {
-        val pushed = state.shownImage
-        if (pushed != null) {
-          // An image Muse pushed covers the room screen until tapped away or replaced.
-          Box(Modifier.fillMaxSize().background(Color.Black).clickable { onDismissImage() }, contentAlignment = Alignment.Center) {
-            Image(pushed.asImageBitmap(), contentDescription = "Pushed image", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-          }
-        } else {
-        val turn = state.ask.turnText
-        val side = if (avatar == null && turn != null) 260.dp else 440.dp
-        Column(
-            Modifier.fillMaxSize().padding(top = 72.dp, bottom = 32.dp, start = 64.dp, end = 64.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center) {
-              val dim by animateFloatAsState(if (mood == Mood.Offline) 0.45f else 1f, tween(600), label = "offline")
-              Box(
-                  Modifier.size(side)
-                      .alpha(dim)
-                      .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onTap),
-                  contentAlignment = Alignment.Center) {
-                    Character(mood, state.level, avatar, side)
-                  }
-              Spacer(Modifier.height(16.dp))
-              AnimatedContent(
-                  targetState = Line(state.statusLine, turn, state.spokenRange),
-                  transitionSpec = { fadeIn(tween(400)) togetherWith fadeOut(tween(400)) },
-                  label = "turn",
-                  // Streaming snapshots, per-word ranges and call captions update in place —
-                  // retriggering the crossfade on them was the blinking. Only a new phase,
-                  // a new question, or words first appearing fades.
-                  contentKey = { it.key }) { line ->
-                TurnWords(line, captionOnly = avatar != null)
-              }
-              val left = state.recordingLeftS
-              if (left != null) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "Recording… ${left / 60}:${(left % 60).toString().padStart(2, '0')} left · tap to send",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Palette.Warn,
-                    textAlign = TextAlign.Center)
-                Spacer(Modifier.height(10.dp))
-                CapLine(state.recordingFraction ?: 0f)
-              }
-            }
-        // The bar lives with the home content, drawn last: while a pushed card is up, the
-        // card gets the whole screen to itself — no buttons over the artwork.
-        TopBar(state, onSettings, onReplay = { showReplays = true }, onToggleMute = onToggleMute, onCallToggle = { if (state.ask is AskState.Calling) onEndCall() else onStartCall() })
-        }
+  Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(BronzeTop, BronzeBottom)))) {
+    Box(
+        Modifier.fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    listOf(BronzeGlow.copy(alpha = 0.32f), Color.Transparent),
+                    center = Offset(240f, 120f),
+                    radius = 1100f)))
+    val pushed = state.shownImage
+    if (pushed != null) {
+      // An image Muse pushed covers the room screen until tapped away or replaced.
+      Box(Modifier.fillMaxSize().background(Color.Black).clickable { onDismissImage() }, contentAlignment = Alignment.Center) {
+        Image(pushed.asImageBitmap(), contentDescription = "Pushed image", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
       }
+    } else {
+      HubContent(
+          state,
+          avatar,
+          onTap,
+          onSettings,
+          onReplay = { showReplays = true },
+          onToggleMute = onToggleMute,
+          onCallToggle = { if (state.ask is AskState.Calling) onEndCall() else onStartCall() })
+    }
+  }
   if (showReplays && state.shownImage == null) {
     ReplayDialog(state, onDismiss = { showReplays = false }, onReplayEntry = { id ->
       showReplays = false
       onReplayEntry(id)
     })
   }
+}
+
+@Composable
+private fun HubContent(
+    state: MuseState,
+    avatar: AvatarSet?,
+    onTap: () -> Unit,
+    onSettings: () -> Unit,
+    onReplay: () -> Unit,
+    onToggleMute: () -> Unit,
+    onCallToggle: () -> Unit,
+) {
+  Row(Modifier.fillMaxSize().padding(36.dp)) {
+    Column(Modifier.weight(0.30f).fillMaxHeight()) {
+      ClockBlock()
+      Spacer(Modifier.height(22.dp))
+      AvatarFrame(state, avatar, onTap)
+      Spacer(Modifier.height(18.dp))
+      ConnectionLine(state)
+      val left = state.recordingLeftS
+      if (left != null) {
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Recording… ${left / 60}:${(left % 60).toString().padStart(2, '0')} left · tap to send",
+            fontFamily = HubFont,
+            fontWeight = FontWeight.Bold,
+            fontSize = 17.sp,
+            color = Palette.Warn)
+        Spacer(Modifier.height(8.dp))
+        CapLine(state.recordingFraction ?: 0f)
+      }
+      Spacer(Modifier.weight(1f))
+      ControlsRow(state, onSettings, onReplay, onToggleMute, onCallToggle)
+    }
+    Spacer(Modifier.width(26.dp))
+    Box(Modifier.width(2.dp).fillMaxHeight().padding(vertical = 10.dp).background(GoldLine.copy(alpha = 0.35f)))
+    Spacer(Modifier.width(26.dp))
+    StatusPanel(state, Modifier.weight(0.70f).fillMaxHeight())
+  }
+}
+
+/** The wall clock: big rounded time, the date under it, ticking on its own. */
+@Composable
+private fun ClockBlock() {
+  var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+  LaunchedEffect(Unit) {
+    while (true) {
+      now = System.currentTimeMillis()
+      delay(1_000)
+    }
+  }
+  val time = remember(now) { SimpleDateFormat("h:mm", Locale.US).format(Date(now)) }
+  val date = remember(now) { SimpleDateFormat("EEEE, MMMM d", Locale.US).format(Date(now)) }
+  Column {
+    Text(time, fontFamily = HubFont, fontWeight = FontWeight.Black, fontSize = 80.sp, color = Color.White)
+    Text(date, fontFamily = HubFont, fontWeight = FontWeight.Bold, fontSize = 23.sp, color = WarmWhite)
+  }
+}
+
+/** The character in its gold-trimmed frame; tapping it asks, as ever. */
+@Composable
+private fun AvatarFrame(state: MuseState, avatar: AvatarSet?, onTap: () -> Unit) {
+  val dim by animateFloatAsState(if (state.mood == Mood.Offline) 0.45f else 1f, tween(600), label = "offline")
+  BoxWithConstraints(Modifier.fillMaxWidth()) {
+    val side = maxWidth
+    Box(
+        Modifier.size(side)
+            .clip(RoundedCornerShape(26.dp))
+            .background(Color.White.copy(alpha = 0.05f))
+            .border(3.dp, GoldLine.copy(alpha = 0.8f), RoundedCornerShape(26.dp))
+            .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onTap),
+        contentAlignment = Alignment.Center) {
+          Box(Modifier.alpha(dim)) { Character(state.mood, state.level, avatar, side) }
+        }
+  }
+}
+
+/** The one status line the old top bar carried, now under the portrait. */
+@Composable
+private fun ConnectionLine(state: MuseState) {
+  val online = state.online
+  val dot by animateColorAsState(if (online) Palette.Good else Palette.Warn, label = "dot")
+  Row(verticalAlignment = Alignment.CenterVertically) {
+    Box(Modifier.size(12.dp).clip(CircleShape).background(dot))
+    Spacer(Modifier.width(10.dp))
+    Text(
+        state.connectionLabel,
+        fontFamily = HubFont,
+        fontSize = 17.sp,
+        color = if (online) WarmWhite.copy(alpha = 0.75f) else Palette.Warn)
+  }
+}
+
+/** The right-hand panel: captions while a turn is live, the standing status otherwise. */
+@Composable
+private fun StatusPanel(state: MuseState, modifier: Modifier) {
+  Box(
+      modifier
+          .clip(RoundedCornerShape(30.dp))
+          .background(Color.Black.copy(alpha = 0.28f))
+          .border(1.5.dp, GoldLine.copy(alpha = 0.55f), RoundedCornerShape(30.dp))
+          .padding(horizontal = 40.dp, vertical = 34.dp)) {
+    val turn = state.ask.turnText
+    val inTurn =
+        turn != null || state.ask is AskState.Calling || state.ask is AskState.Recording || state.ask is AskState.Sending
+    if (inTurn) PanelCaptions(state, turn) else StatusContent(state)
+  }
+}
+
+@Composable
+private fun StatusContent(state: MuseState) {
+  Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+    if (state.hubHeader.isNotBlank()) {
+      Text(
+          state.hubHeader.uppercase(),
+          fontFamily = HubFont,
+          fontWeight = FontWeight.Black,
+          fontSize = 34.sp,
+          letterSpacing = 5.sp,
+          color = Color.White,
+          textAlign = TextAlign.Center)
+      Spacer(Modifier.height(14.dp))
+      Box(Modifier.width(130.dp).height(3.dp).background(GoldLine))
+      Spacer(Modifier.height(22.dp))
+    }
+    Text(
+        state.hubBody.ifBlank { defaultStatusBody(state) },
+        fontFamily = HubFont,
+        fontSize = 26.sp,
+        lineHeight = 39.sp,
+        color = WarmWhite,
+        textAlign = TextAlign.Center)
+  }
+}
+
+private fun defaultStatusBody(state: MuseState): String =
+    if (!state.online) {
+      "Not connected right now.\nCheck the Wi-Fi, or open Settings with the gear below."
+    } else {
+      "All quiet in the kitchen.\n\nSay \u201CHey Muse\u201D, tap my portrait,\nor tap the green phone to talk."
+    }
+
+/** The turn's words in the panel: the question as heard, the phase line, and the answer's current page. */
+@Composable
+private fun PanelCaptions(state: MuseState, turn: TurnText?) {
+  Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+    if (turn != null && turn.heard.isNotEmpty()) {
+      Text(
+          "\u201C${turn.heard}\u201D",
+          fontFamily = HubFont,
+          fontSize = 21.sp,
+          color = WarmWhite.copy(alpha = 0.65f),
+          textAlign = TextAlign.Center,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis)
+      Spacer(Modifier.height(14.dp))
+    }
+    if (state.statusLine.isNotEmpty() && (turn == null || turn.answer.isEmpty())) {
+      Text(state.statusLine, fontFamily = HubFont, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Color.White, textAlign = TextAlign.Center)
+    }
+    if (turn != null && turn.live) {
+      RollingText(turn.answer, 7, TextStyle(fontFamily = HubFont, fontSize = 30.sp, lineHeight = 39.sp), Color.White, TextAlign.Center)
+    } else if (turn != null && turn.answer.isNotEmpty()) {
+      val size = 30.sp
+      val color = if (turn.failed) Palette.Bad else Color.White
+      val range = state.spokenRange?.takeIf { !turn.complete || it.first in turn.answer.indices }
+      if (!turn.complete || range != null) {
+        // In progress: show the page holding the spoken word (page one while the answer is
+        // still streaming in), with the word being spoken lit up when the engine reports one.
+        val page = captionPage(turn.answer, focus = range?.first ?: 0, highlight = range, charsPerPage = PANEL_PAGE_CHARS)
+        val annotated =
+            buildAnnotatedString {
+              append(page.text)
+              page.highlight?.let {
+                addStyle(
+                    SpanStyle(color = GoldLine, fontWeight = FontWeight.Bold),
+                    it.first.coerceIn(0, page.text.length),
+                    minOf(it.last + 1, page.text.length))
+              }
+            }
+        Text(
+            annotated,
+            fontFamily = HubFont,
+            fontSize = size,
+            lineHeight = size * 1.3f,
+            color = color,
+            textAlign = TextAlign.Center,
+            maxLines = 11,
+            overflow = TextOverflow.Ellipsis)
+      } else {
+        Text(
+            turn.answer,
+            fontFamily = HubFont,
+            fontSize = size,
+            lineHeight = size * 1.3f,
+            color = color,
+            textAlign = TextAlign.Center,
+            maxLines = 11,
+            overflow = TextOverflow.Ellipsis)
+      }
+    }
+  }
+}
+
+/** The controls, bottom of the left column: nothing up top to collide with the clock or the panel. */
+@Composable
+private fun ControlsRow(state: MuseState, onSettings: () -> Unit, onReplay: () -> Unit, onToggleMute: () -> Unit, onCallToggle: () -> Unit) {
+  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    // Green handset at rest, red CallEnd while a call runs; shown only when a call could start or end.
+    val calling = state.ask is AskState.Calling
+    val callResting = state.ask.let { it is AskState.Idle || (it is AskState.Answered && it.complete) || it is AskState.Failed }
+    if (state.online && (calling || callResting)) {
+      Box(
+          Modifier.size(58.dp).clip(CircleShape).background(if (calling) Palette.Bad else Palette.Good).clickable { onCallToggle() },
+          contentAlignment = Alignment.Center) {
+            Icon(
+                if (calling) Icons.Filled.CallEnd else Icons.Filled.Phone,
+                contentDescription = if (calling) "End call" else "Start voice call",
+                tint = Color.White,
+                modifier = Modifier.size(30.dp))
+          }
+    }
+    ChipButton(onClick = onReplay) {
+      Icon(Icons.Filled.Replay, contentDescription = "Replay an announcement", tint = WarmWhite, modifier = Modifier.size(28.dp))
+    }
+    ChipButton(onClick = onToggleMute) {
+      Icon(
+          if (state.muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
+          contentDescription = if (state.muted) "Unmute" else "Mute",
+          tint = WarmWhite,
+          modifier = Modifier.size(28.dp))
+    }
+    ChipButton(onClick = onSettings) {
+      Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = WarmWhite, modifier = Modifier.size(28.dp))
+    }
+  }
+}
+
+@Composable
+private fun ChipButton(onClick: () -> Unit, content: @Composable () -> Unit) {
+  Box(
+      Modifier.size(58.dp)
+          .clip(CircleShape)
+          .background(Color.Black.copy(alpha = 0.30f))
+          .border(1.dp, GoldLine.copy(alpha = 0.45f), CircleShape)
+          .clickable { onClick() },
+      contentAlignment = Alignment.Center) {
+        content()
+      }
 }
 
 /** The last few announcements, newest first; tapping one shows and plays it again. */
@@ -200,17 +435,8 @@ private fun ReplayDialog(state: MuseState, onDismiss: () -> Unit, onReplayEntry:
       confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } })
 }
 
-private data class Line(val status: String, val turn: TurnText?, val range: IntRange? = null) {
-  /** Words arriving in the same turn update in place; a new turn or status fades in. */
-  val key
-    get() = Triple(status, turn?.heard, turn?.let { it.live || it.answer.isNotEmpty() })
-}
-
-/** Chars of answer per caption page on the avatar layout: about four lines at caption size. */
-private const val CAPTION_PAGE_CHARS = 352
-
-/** Chars per page on the large-text layout, where lines hold fewer, bigger characters. */
-private const val FULL_PAGE_CHARS = 480
+/** Chars of answer per caption page in the hub panel: about eleven lines at panel size. */
+private const val PANEL_PAGE_CHARS = 560
 
 /** One page of a long answer, with the spoken word's span inside it when there is one. */
 private data class CaptionPage(val text: String, val highlight: IntRange?)
@@ -281,105 +507,5 @@ fun RollingText(text: String, lines: Int, style: TextStyle, color: Color, textAl
   val height = with(LocalDensity.current) { line.toDp() } * lines
   Box(Modifier.fillMaxWidth().heightIn(max = height).clipToBounds(), contentAlignment = Alignment.BottomCenter) {
     Text(text, style = exact, color = color, textAlign = textAlign, modifier = Modifier.fillMaxWidth().wrapContentHeight(Alignment.Bottom, unbounded = true))
-  }
-}
-
-@Composable
-private fun TurnWords(line: Line, captionOnly: Boolean) {
-  Column(Modifier.widthIn(max = 1040.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    val turn = line.turn
-    if (turn != null && turn.heard.isNotEmpty()) {
-      Text("“${turn.heard}”", style = MaterialTheme.typography.bodyLarge, color = Palette.Faint, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-    }
-    if (line.status.isNotEmpty() && (turn == null || turn.answer.isEmpty())) {
-      Text(line.status, style = MaterialTheme.typography.titleLarge, color = Palette.Dim, textAlign = TextAlign.Center)
-    }
-    if (turn != null && turn.live) {
-      val size = if (captionOnly) 26.sp else 34.sp
-      RollingText(turn.answer, if (captionOnly) 3 else 5, TextStyle(fontSize = size, lineHeight = size * 1.3f), if (captionOnly) Palette.Dim else Palette.Text, TextAlign.Center)
-    } else if (turn != null && turn.answer.isNotEmpty()) {
-      val size = if (captionOnly) 26.sp else if (turn.answer.length > 160) 30.sp else 38.sp
-      val color = if (turn.failed) Palette.Bad else if (captionOnly) Palette.Dim else Palette.Text
-      val maxLines = if (captionOnly) 5 else 6
-      val range = line.range?.takeIf { !turn.complete || it.first in turn.answer.indices }
-      if (!turn.complete || range != null) {
-        // In progress: show the page holding the spoken word (page one while the answer is
-        // still streaming in), with the word being spoken lit up when the engine reports one.
-        val page =
-            captionPage(
-                turn.answer,
-                focus = range?.first ?: 0,
-                highlight = range,
-                charsPerPage = if (captionOnly) CAPTION_PAGE_CHARS else FULL_PAGE_CHARS)
-        val annotated =
-            buildAnnotatedString {
-              append(page.text)
-              page.highlight?.let {
-                addStyle(
-                    SpanStyle(color = Palette.Accent, fontWeight = FontWeight.Bold),
-                    it.first.coerceIn(0, page.text.length),
-                    minOf(it.last + 1, page.text.length))
-              }
-            }
-        Text(
-            annotated,
-            fontSize = size,
-            lineHeight = size * 1.3f,
-            color = color,
-            textAlign = TextAlign.Center,
-            maxLines = maxLines,
-            overflow = TextOverflow.Ellipsis)
-      } else {
-        Text(
-            turn.answer,
-            fontSize = size,
-            lineHeight = size * 1.3f,
-            color = color,
-            textAlign = TextAlign.Center,
-            maxLines = maxLines,
-            overflow = TextOverflow.Ellipsis)
-      }
-    }
-  }
-}
-
-@Composable
-private fun TopBar(state: MuseState, onSettings: () -> Unit, onReplay: () -> Unit, onToggleMute: () -> Unit, onCallToggle: () -> Unit = {}) {
-  Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 28.dp), verticalAlignment = Alignment.CenterVertically) {
-    val online = state.online
-    val dot by animateColorAsState(if (online) Palette.Good else Palette.Warn, label = "dot")
-    Box(Modifier.size(14.dp).clip(CircleShape).background(dot))
-    Spacer(Modifier.size(14.dp))
-    Text(state.connectionLabel, style = MaterialTheme.typography.bodyLarge, color = if (online) Palette.Faint else Palette.Warn)
-    Spacer(Modifier.weight(1f))
-    // The phone button lives up here with the other actions: green handset at rest, red
-    // CallEnd while a call runs. Shown only when a call could actually start or end.
-    val calling = state.ask is AskState.Calling
-    val callResting = state.ask.let { it is AskState.Idle || (it is AskState.Answered && it.complete) || it is AskState.Failed }
-    if (state.online && (calling || callResting)) {
-      Box(
-          Modifier.size(56.dp).clip(CircleShape).background(if (calling) Palette.Bad else Palette.Good).clickable { onCallToggle() },
-          contentAlignment = Alignment.Center) {
-            Icon(
-                if (calling) Icons.Filled.CallEnd else Icons.Filled.Phone,
-                contentDescription = if (calling) "End call" else "Start voice call",
-                tint = Color.White,
-                modifier = Modifier.size(30.dp))
-          }
-      Spacer(Modifier.size(10.dp))
-    }
-    IconButton(onClick = onReplay, modifier = Modifier.size(64.dp)) {
-      Icon(Icons.Filled.Replay, contentDescription = "Replay an announcement", tint = Palette.Dim, modifier = Modifier.size(36.dp))
-    }
-    IconButton(onClick = onToggleMute, modifier = Modifier.size(64.dp)) {
-      Icon(
-          if (state.muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
-          contentDescription = if (state.muted) "Unmute" else "Mute",
-          tint = Palette.Dim,
-          modifier = Modifier.size(36.dp))
-    }
-    IconButton(onClick = onSettings, modifier = Modifier.size(64.dp)) {
-      Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = Palette.Dim, modifier = Modifier.size(36.dp))
-    }
   }
 }

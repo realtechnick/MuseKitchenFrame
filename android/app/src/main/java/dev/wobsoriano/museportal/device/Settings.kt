@@ -35,6 +35,16 @@ class Settings(context: Context) {
     get() = prefs.getBoolean(KEY_MUTED, false)
     set(value) = prefs.edit().putBoolean(KEY_MUTED, value).apply()
 
+  /** The hub home screen's status header, set from Muse by display.set_status. */
+  var hubHeader: String
+    get() = prefs.getString(KEY_HUB_HEADER, null).orEmpty()
+    set(value) = prefs.edit().putString(KEY_HUB_HEADER, value).apply()
+
+  /** The hub home screen's status body, set from Muse by display.set_status. */
+  var hubBody: String
+    get() = prefs.getString(KEY_HUB_BODY, null).orEmpty()
+    set(value) = prefs.edit().putString(KEY_HUB_BODY, value).apply()
+
   /** "Hey Muse" starts a realtime call with Muse instead of a voice note. Experimental. */
   var conversationMode: Boolean
     get() = prefs.getBoolean(KEY_CONVERSATION, false)
@@ -65,6 +75,8 @@ class Settings(context: Context) {
     const val KEY_WAKE = "wakeEnabled"
     const val KEY_KEEP_LISTENING = "keepListening"
     const val KEY_MUTED = "muted"
+    const val KEY_HUB_HEADER = "hubHeader"
+    const val KEY_HUB_BODY = "hubBody"
     const val KEY_CONVERSATION = "conversationMode"
     const val KEY_DUPLEX = "duplex"
     const val KEY_SETUP = "setup"

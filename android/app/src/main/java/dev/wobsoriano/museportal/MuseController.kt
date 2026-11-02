@@ -150,6 +150,10 @@ data class MuseState(
     val printerStatus: String = "",
     /** The last print's outcome line, for the Settings section. */
     val printerLast: String = "",
+    /** The hub status panel's header, set by display.set_status; empty shows the default. */
+    val hubHeader: String = "",
+    /** The hub status panel's body, set by display.set_status; empty shows the default. */
+    val hubBody: String = "",
     /** Seconds of recording left before the cap, while a question is being captured; else null. */
     val recordingLeftS: Int? = null,
     /** The fraction of the capture cap left (1 = just started), for the shrinking line; else null. */
@@ -185,6 +189,8 @@ class MuseController(private val context: Context) {
               voice = settings.voice,
               speechRate = settings.speechRate,
               muted = settings.muted,
+              hubHeader = settings.hubHeader,
+              hubBody = settings.hubBody,
               announcements = announcementStore.loadAll(),
               setup = settings.setup)
               .withSettings())
@@ -784,6 +790,27 @@ class MuseController(private val context: Context) {
                   Handler { _, _ ->
                     clearImage()
                     buildJsonObject { put("cleared", true) }
+                  },
+          ),
+          Command(
+              name = "display.set_status",
+              description = "Set the hub home screen's status panel (header + body text shown on the right of the tablet's home screen until replaced — for the day's events, meal plans, notes and jokes). A field that is present replaces the current value (empty string clears it); an omitted field keeps its current value.",
+              optional =
+                  listOf(
+                      Param("header", ParamType.String, "Short header line, shown large"),
+                      Param("body", ParamType.String, "Body text; paragraphs split on newlines"),
+                  ),
+              handler =
+                  Handler { args, _ ->
+                    val json = try { org.json.JSONObject(args) } catch (e: Exception) { org.json.JSONObject() }
+                    if (json.has("header")) settings.hubHeader = json.optString("header", "")
+                    if (json.has("body")) settings.hubBody = json.optString("body", "")
+                    _state.update { it.copy(hubHeader = settings.hubHeader, hubBody = settings.hubBody) }
+                    buildJsonObject {
+                      put("set", true)
+                      put("header", settings.hubHeader)
+                      put("body", settings.hubBody)
+                    }
                   },
           ),
           Command(
