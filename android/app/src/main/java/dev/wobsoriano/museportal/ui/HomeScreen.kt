@@ -167,12 +167,12 @@ private fun HubContent(
     onCallToggle: () -> Unit,
 ) {
   Row(Modifier.fillMaxSize().padding(36.dp)) {
-    Column(Modifier.weight(0.30f).fillMaxHeight()) {
+    Column(Modifier.weight(0.28f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
       ClockBlock()
       Spacer(Modifier.height(22.dp))
       AvatarFrame(state, avatar, onTap)
       Spacer(Modifier.height(18.dp))
-      ConnectionLine(state)
+      DeviceStatus(state)
       val left = state.recordingLeftS
       if (left != null) {
         Spacer(Modifier.height(12.dp))
@@ -188,14 +188,12 @@ private fun HubContent(
       Spacer(Modifier.weight(1f))
       ControlsRow(state, onSettings, onReplay, onToggleMute, onCallToggle)
     }
-    Spacer(Modifier.width(26.dp))
-    Box(Modifier.width(2.dp).fillMaxHeight().padding(vertical = 10.dp).background(GoldLine.copy(alpha = 0.35f)))
-    Spacer(Modifier.width(26.dp))
-    StatusPanel(state, Modifier.weight(0.70f).fillMaxHeight())
+    Spacer(Modifier.width(30.dp))
+    StatusPanel(state, Modifier.weight(0.72f).fillMaxHeight())
   }
 }
 
-/** The wall clock: big rounded time, the date under it, ticking on its own. */
+/** The wall clock, centered over the portrait: big time, the weekday larger, then month and day. */
 @Composable
 private fun ClockBlock() {
   var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -206,10 +204,12 @@ private fun ClockBlock() {
     }
   }
   val time = remember(now) { SimpleDateFormat("h:mm", Locale.US).format(Date(now)) }
-  val date = remember(now) { SimpleDateFormat("EEEE, MMMM d", Locale.US).format(Date(now)) }
-  Column {
-    Text(time, fontFamily = HubFont, fontWeight = FontWeight.Black, fontSize = 80.sp, color = Color.White)
-    Text(date, fontFamily = HubFont, fontWeight = FontWeight.Bold, fontSize = 23.sp, color = WarmWhite)
+  val day = remember(now) { SimpleDateFormat("EEEE", Locale.US).format(Date(now)) }
+  val date = remember(now) { SimpleDateFormat("MMMM d", Locale.US).format(Date(now)) }
+  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Text(time, fontFamily = HubFont, fontWeight = FontWeight.Black, fontSize = 74.sp, color = Color.White)
+    Text(day, fontFamily = HubFont, fontWeight = FontWeight.Black, fontSize = 36.sp, color = WarmWhite)
+    Text(date, fontFamily = HubFont, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = WarmWhite.copy(alpha = 0.8f))
   }
 }
 
@@ -231,19 +231,37 @@ private fun AvatarFrame(state: MuseState, avatar: AvatarSet?, onTap: () -> Unit)
   }
 }
 
-/** The one status line the old top bar carried, now under the portrait. */
+private val PrinterBlue = Color(0xFF60A5FA)
+
+/**
+ * Live device status under the portrait: the frame's own connection, then the printer.
+ * The printer dot is softened state, not live link state (the PM230 only holds a link
+ * while talked to): blue when the last check-in reached it, red only when a check-in
+ * actually failed, dim until the first check-in has run.
+ */
 @Composable
-private fun ConnectionLine(state: MuseState) {
-  val online = state.online
-  val dot by animateColorAsState(if (online) Palette.Good else Palette.Warn, label = "dot")
+private fun DeviceStatus(state: MuseState) {
+  Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+    val online = state.online
+    val dot by animateColorAsState(if (online) Palette.Good else Palette.Bad, label = "muse dot")
+    StatusRow(dot, "Muse Frame · ${state.connectionLabel}", if (online) WarmWhite.copy(alpha = 0.8f) else Palette.Bad)
+    val (pDot, pText, pColor) =
+        when {
+          !state.printerPaired -> Triple(WarmWhite.copy(alpha = 0.35f), "Printer Not Paired", WarmWhite.copy(alpha = 0.55f))
+          state.printerReachable == true -> Triple(PrinterBlue, "Printer Connected · PM230", WarmWhite.copy(alpha = 0.8f))
+          state.printerReachable == false -> Triple(Palette.Bad, "Printer Unreachable · PM230", Palette.Bad)
+          else -> Triple(PrinterBlue.copy(alpha = 0.45f), "Printer Paired · PM230", WarmWhite.copy(alpha = 0.65f))
+        }
+    StatusRow(pDot, pText, pColor)
+  }
+}
+
+@Composable
+private fun StatusRow(dot: Color, text: String, textColor: Color) {
   Row(verticalAlignment = Alignment.CenterVertically) {
     Box(Modifier.size(12.dp).clip(CircleShape).background(dot))
     Spacer(Modifier.width(10.dp))
-    Text(
-        state.connectionLabel,
-        fontFamily = HubFont,
-        fontSize = 17.sp,
-        color = if (online) WarmWhite.copy(alpha = 0.75f) else Palette.Warn)
+    Text(text, fontFamily = HubFont, fontSize = 17.sp, color = textColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
   }
 }
 
@@ -265,7 +283,7 @@ private fun StatusPanel(state: MuseState, modifier: Modifier) {
 
 @Composable
 private fun StatusContent(state: MuseState) {
-  Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+  Column(Modifier.fillMaxSize().padding(top = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
     if (state.hubHeader.isNotBlank()) {
       Text(
           state.hubHeader.uppercase(),
@@ -358,10 +376,13 @@ private fun PanelCaptions(state: MuseState, turn: TurnText?) {
   }
 }
 
-/** The controls, bottom of the left column: nothing up top to collide with the clock or the panel. */
+/** The controls, centered at the bottom of the left column: nothing up top to collide with the clock or the panel. */
 @Composable
 private fun ControlsRow(state: MuseState, onSettings: () -> Unit, onReplay: () -> Unit, onToggleMute: () -> Unit, onCallToggle: () -> Unit) {
-  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+  Row(
+      Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally)) {
     // Green handset at rest, red CallEnd while a call runs; shown only when a call could start or end.
     val calling = state.ask is AskState.Calling
     val callResting = state.ask.let { it is AskState.Idle || (it is AskState.Answered && it.complete) || it is AskState.Failed }

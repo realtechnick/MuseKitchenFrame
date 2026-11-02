@@ -1,10 +1,10 @@
 {
  "cell": 512,
- "fps": 12.5,
+ "fps": 12,
  "animations": {
   "idle": {
-   "frames": 1,
-   "columns": 1,
+   "frames": 96,
+   "columns": 12,
    "loop": true
   },
   "listening": {

@@ -150,6 +150,15 @@ data class MuseState(
     val printerStatus: String = "",
     /** The last print's outcome line, for the Settings section. */
     val printerLast: String = "",
+    /** The PM230 is bonded to this tablet (cheap check, no connect). */
+    val printerPaired: Boolean = false,
+    /**
+     * The PM230's last check-in outcome, for the hub's printer line: true when the last
+     * probe or print reached it, false when a check-in failed, null until one has run.
+     * The printer only holds a Bluetooth link while talked to, so this — not live link
+     * state — is what the hub shows (Boss's softened semantics, 2026-11-02).
+     */
+    val printerReachable: Boolean? = null,
     /** The hub status panel's header, set by display.set_status; empty shows the default. */
     val hubHeader: String = "",
     /** The hub status panel's body, set by display.set_status; empty shows the default. */
@@ -302,6 +311,13 @@ class MuseController(private val context: Context) {
     supervisor = scope.launch { supervise() }
     heyMuse.start(settings.wakeEnabled, asking = busy)
     refreshPrinterStatus()
+    scope.launch {
+      delay(20_000)
+      while (true) {
+        checkPrinterIn()
+        delay(15 * 60_000L)
+      }
+    }
   }
 
   @Synchronized
@@ -497,7 +513,31 @@ class MuseController(private val context: Context) {
 
   /** Refresh the Settings printer line (permission / pairing state). Cheap: no connect. */
   fun refreshPrinterStatus() {
-    _state.update { it.copy(printerStatus = printer.statusText()) }
+    _state.update { it.copy(printerStatus = printer.statusText(), printerPaired = printer.isPaired()) }
+  }
+
+  /** Record a printer check-in outcome (probe, print, test print) for the hub's printer line. */
+  private fun notePrinterCheck(reached: Boolean) {
+    if (printer.isPaired()) _state.update { it.copy(printerReachable = reached) }
+  }
+
+  /**
+   * One silent reachability check-in: opens the printer's link and closes it, printing
+   * nothing. Runs shortly after start and then every quarter hour, so the hub's printer
+   * line reflects the last check-in instead of pretending to know live link state.
+   */
+  private suspend fun checkPrinterIn() {
+    if (!printer.isPaired()) {
+      _state.update { it.copy(printerPaired = false, printerReachable = null) }
+      return
+    }
+    _state.update { it.copy(printerPaired = true) }
+    try {
+      printer.probe()
+      notePrinterCheck(true)
+    } catch (e: CommandFailed) {
+      notePrinterCheck(false)
+    }
   }
 
   /** The Settings test print: one canned slip through the full pipeline. */
@@ -512,10 +552,12 @@ class MuseController(private val context: Context) {
                 PrintAlign.Left,
                 PrintFormat.DEFAULT_DENSITY)
         val name = printer.send(job)
+        notePrinterCheck(true)
         _state.update {
           it.copy(printerLast = "Test print sent to $name · ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}")
         }
       } catch (e: CommandFailed) {
+        notePrinterCheck(false)
         _state.update { it.copy(printerLast = "Test print failed: ${e.message}") }
       }
       refreshPrinterStatus()
@@ -880,7 +922,13 @@ class MuseController(private val context: Context) {
                     val copies = intArg(args, "copies", 1, 1, 3)
                     val (job, heightMm) = PrintJob.buildTextJob(title, text, align, density)
                     var name = ""
-                    repeat(copies) { name = printer.send(job) }
+                    try {
+                      repeat(copies) { name = printer.send(job) }
+                    } catch (e: CommandFailed) {
+                      notePrinterCheck(false)
+                      throw e
+                    }
+                    notePrinterCheck(true)
                     _state.update {
                       it.copy(
                           printerLast = "Printed a ${heightMm.toInt()} mm slip · ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}")
@@ -900,7 +948,14 @@ class MuseController(private val context: Context) {
               timeout = 90.seconds,
               handler =
                   Handler { _, _ ->
-                    val name = printer.probe()
+                    val name =
+                        try {
+                          printer.probe()
+                        } catch (e: CommandFailed) {
+                          notePrinterCheck(false)
+                          throw e
+                        }
+                    notePrinterCheck(true)
                     refreshPrinterStatus()
                     buildJsonObject {
                       put("reachable", true)
@@ -933,6 +988,7 @@ class MuseController(private val context: Context) {
       put("muted", s.muted)
       put("announcements", s.announcements.size)
       put("printer_paired", printer.isPaired())
+      s.printerReachable?.let { put("printer_reachable", it) }
     }
   }
 
