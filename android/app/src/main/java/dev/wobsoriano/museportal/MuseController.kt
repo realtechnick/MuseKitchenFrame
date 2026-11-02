@@ -57,7 +57,9 @@ import dev.wobsoriano.museportal.ble.StandardGattPeripheral
 import dev.wobsoriano.museportal.device.AnnouncementInfo
 import dev.wobsoriano.museportal.device.AnnouncementStore
 import dev.wobsoriano.museportal.device.NetworkInfo
+import dev.wobsoriano.museportal.device.NightSchedule
 import dev.wobsoriano.museportal.device.Settings
+import java.util.Calendar
 import dev.wobsoriano.museportal.heymuse.WakeHost
 import dev.wobsoriano.museportal.heymuse.WakeInput
 import dev.wobsoriano.museportal.heymuse.WakeListener
@@ -107,6 +109,43 @@ sealed interface CoreState {
   data class Restarting(val error: String, val inMs: Long) : CoreState
 
   data object Stopped : CoreState
+}
+
+/** A recipe card on the hub panel (display.set_recipe): title, a meta line, ingredients, steps. */
+data class RecipeBoard(
+    val title: String,
+    val meta: String = "",
+    val eyebrow: String = "Dinner prep",
+    val ingredients: List<String> = emptyList(),
+    val steps: List<String> = emptyList(),
+) {
+  fun toJson(): String =
+      JSONObject()
+          .put("title", title)
+          .put("meta", meta)
+          .put("eyebrow", eyebrow)
+          .put("ingredients", org.json.JSONArray(ingredients))
+          .put("steps", org.json.JSONArray(steps))
+          .toString()
+
+  companion object {
+    fun fromJson(raw: String): RecipeBoard? {
+      if (raw.isBlank()) return null
+      val json = try { JSONObject(raw) } catch (e: Exception) { return null }
+      val title = json.optString("title", "")
+      if (title.isBlank()) return null
+      fun strings(key: String): List<String> {
+        val arr = json.optJSONArray(key) ?: return emptyList()
+        return (0 until arr.length()).map { arr.optString(it, "") }.filter { it.isNotBlank() }
+      }
+      return RecipeBoard(
+          title = title,
+          meta = json.optString("meta", ""),
+          eyebrow = json.optString("eyebrow", "").ifBlank { "Dinner prep" },
+          ingredients = strings("ingredients"),
+          steps = strings("steps"))
+    }
+  }
 }
 
 /** Everything the screen shows. */
@@ -163,6 +202,18 @@ data class MuseState(
     val hubHeader: String = "",
     /** The hub status panel's body, set by display.set_status; empty shows the default. */
     val hubBody: String = "",
+    /** The recipe card on the panel, set by display.set_recipe; while set it takes the panel over. */
+    val recipe: RecipeBoard? = null,
+    /** The night schedule: screen off late, back on in the morning. */
+    val nightEnabled: Boolean = false,
+    val nightStartMin: Int = 23 * 60 + 59,
+    val nightEndMin: Int = 8 * 60,
+    /** The force-lock grant is in place, so the night off is a true display-off. */
+    val nightAdminActive: Boolean = false,
+    /** The developer "Stay awake" option is on; it would defeat the night off. */
+    val stayAwakeOn: Boolean = false,
+    /** The frame is inside its night window right now. */
+    val nightAsleep: Boolean = false,
     /** Seconds of recording left before the cap, while a question is being captured; else null. */
     val recordingLeftS: Int? = null,
     /** The fraction of the capture cap left (1 = just started), for the shrinking line; else null. */
@@ -200,6 +251,11 @@ class MuseController(private val context: Context) {
               muted = settings.muted,
               hubHeader = settings.hubHeader,
               hubBody = settings.hubBody,
+              recipe = RecipeBoard.fromJson(settings.hubRecipeJson),
+              nightEnabled = settings.nightEnabled,
+              nightStartMin = settings.nightStartMin,
+              nightEndMin = settings.nightEndMin,
+              nightAsleep = settings.nightAsleep,
               announcements = announcementStore.loadAll(),
               setup = settings.setup)
               .withSettings())
@@ -266,6 +322,8 @@ class MuseController(private val context: Context) {
           }
   private var expiry: Job? = null
   private var expiring: AskState? = null
+  /** The recipe card's auto-return to the status board, when a showing was timed. */
+  private var recipeExpiry: Job? = null
   private val chime = Chime()
   /** The audio.play_url player; replaced on each play. */
   private var player: MediaPlayer? = null
@@ -310,6 +368,16 @@ class MuseController(private val context: Context) {
     network.start()
     supervisor = scope.launch { supervise() }
     heyMuse.start(settings.wakeEnabled, asking = busy)
+    NightSchedule.armAll(context)
+    refreshNightFlags()
+    if (settings.nightEnabled) {
+      val cal = Calendar.getInstance()
+      val nowMin = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+      if (NightSchedule.inWindow(settings.nightStartMin, settings.nightEndMin, nowMin) && !settings.nightAsleep) {
+        settings.nightAsleep = true
+        _state.update { it.copy(nightAsleep = true) }
+      }
+    }
     refreshPrinterStatus()
     scope.launch {
       delay(20_000)
@@ -471,7 +539,76 @@ class MuseController(private val context: Context) {
 
   fun setInFront(inFront: Boolean) {
     _state.update { it.copy(inFront = inFront) }
+    if (inFront) refreshNightFlags()
     if (!inFront) step(AskInput.LeftApp)
+  }
+
+  /** Re-reads the two night facts that live outside the app: the admin grant and Stay awake. */
+  fun refreshNightFlags() {
+    _state.update {
+      it.copy(
+          nightAdminActive = NightSchedule.isAdminActive(context),
+          stayAwakeOn = NightSchedule.stayAwakeOn(context))
+    }
+  }
+
+  fun setNightEnabled(on: Boolean) {
+    settings.nightEnabled = on
+    if (!on && settings.nightAsleep) {
+      settings.nightAsleep = false
+    }
+    _state.update { it.copy(nightEnabled = on, nightAsleep = settings.nightAsleep) }
+    NightSchedule.armAll(context)
+    refreshNightFlags()
+  }
+
+  fun setNightStartMin(min: Int) {
+    settings.nightStartMin = min.coerceIn(0, 1439)
+    _state.update { it.copy(nightStartMin = settings.nightStartMin) }
+    NightSchedule.armAll(context)
+  }
+
+  fun setNightEndMin(min: Int) {
+    settings.nightEndMin = min.coerceIn(0, 1439)
+    _state.update { it.copy(nightEndMin = settings.nightEndMin) }
+    NightSchedule.armAll(context)
+  }
+
+  /** The night-off alarm fired: go dark — overlay first, then a true display-off if granted. */
+  fun onNightOff() {
+    settings.nightAsleep = true
+    _state.update { it.copy(nightAsleep = true) }
+    NightSchedule.lockNow(context)
+  }
+
+  /** The morning alarm fired: the hub is back. */
+  fun onNightOn() {
+    settings.nightAsleep = false
+    _state.update { it.copy(nightAsleep = false) }
+  }
+
+  /** Puts a recipe card on the panel; a positive [minutes] returns to the status afterwards. */
+  fun showRecipe(board: RecipeBoard, minutes: Int) {
+    settings.hubRecipeJson = board.toJson()
+    _state.update { it.copy(recipe = board) }
+    recipeExpiry?.cancel()
+    recipeExpiry =
+        if (minutes > 0) {
+          scope.launch {
+            delay(minutes * 60_000L)
+            clearRecipe()
+          }
+        } else {
+          null
+        }
+  }
+
+  /** Takes the recipe card down; the standing status board shows again, untouched. */
+  fun clearRecipe() {
+    recipeExpiry?.cancel()
+    recipeExpiry = null
+    if (settings.hubRecipeJson.isNotEmpty()) settings.hubRecipeJson = ""
+    if (_state.value.recipe != null) _state.update { it.copy(recipe = null) }
   }
 
   /** What support needs to know, with nothing secret in it. */
@@ -836,7 +973,7 @@ class MuseController(private val context: Context) {
           ),
           Command(
               name = "display.set_status",
-              description = "Set the hub home screen's status panel (header + body text shown on the right of the tablet's home screen until replaced — for the day's events, meal plans, notes and jokes). A field that is present replaces the current value (empty string clears it); an omitted field keeps its current value.",
+              description = "Set the hub home screen's status panel (header + body text shown on the right of the tablet's home screen until replaced — for the day's events, meal plans, notes and jokes). A field that is present replaces the current value (empty string clears it); an omitted field keeps its current value. Setting a status also takes down any recipe card. The body is lines with light markup: '# ' headline (gold), '## ' hero line, '> ' quote, '~ ' footnote, '---' divider, '< ' left-aligned, tone prefixes '[gold] ' '[dim] ' '[green] ' '[blue] ' '[red] '; blank lines are spacers and stack. The panel auto-shrinks long boards to fit without scrolling.",
               optional =
                   listOf(
                       Param("header", ParamType.String, "Short header line, shown large"),
@@ -847,11 +984,56 @@ class MuseController(private val context: Context) {
                     val json = try { org.json.JSONObject(args) } catch (e: Exception) { org.json.JSONObject() }
                     if (json.has("header")) settings.hubHeader = json.optString("header", "")
                     if (json.has("body")) settings.hubBody = json.optString("body", "")
+                    clearRecipe()
                     _state.update { it.copy(hubHeader = settings.hubHeader, hubBody = settings.hubBody) }
                     buildJsonObject {
                       put("set", true)
                       put("header", settings.hubHeader)
                       put("body", settings.hubBody)
+                    }
+                  },
+          ),
+          Command(
+              name = "display.set_recipe",
+              description = "Show a recipe card on the hub panel — for dinner prep: a title, an optional meta line (serves / time / appliance), ingredients laid out in two columns and numbered steps, all fitted to the panel with no scrolling. The card stays until a status is set, the minutes run out, or a new recipe replaces it; the status board underneath is untouched.",
+              required = listOf(Param("title", ParamType.String, "The dish's name")),
+              optional =
+                  listOf(
+                      Param("meta", ParamType.String, "A line under the title, e.g. 'Serves 2 · 25 minutes · Toaster oven'"),
+                      Param("eyebrow", ParamType.String, "The small label above the title, default 'Dinner prep'"),
+                      Param("ingredients", ParamType.String, "The ingredients, as a JSON array of strings"),
+                      Param("steps", ParamType.String, "The steps, as a JSON array of strings"),
+                      Param("minutes", ParamType.Integer, "Auto-return to the status board after this many minutes; omit to stay until replaced"),
+                  ),
+              handler =
+                  Handler { args, _ ->
+                    val json = try { org.json.JSONObject(args) } catch (e: Exception) { org.json.JSONObject() }
+                    val title = json.optString("title", "")
+                    if (title.isBlank()) throw CommandFailed("a recipe needs a 'title'")
+                    fun strings(key: String): List<String> {
+                      // The parameter surface has no array type, so accept a real JSON
+                      // array or a string holding one.
+                      val arr =
+                          json.optJSONArray(key)
+                              ?: json.optString(key, "").takeIf { it.isNotBlank() }?.let { raw ->
+                                try { org.json.JSONArray(raw) } catch (e: Exception) { null }
+                              }
+                              ?: return emptyList()
+                      return (0 until arr.length()).map { arr.optString(it, "") }.filter { it.isNotBlank() }
+                    }
+                    val board =
+                        RecipeBoard(
+                            title = title,
+                            meta = json.optString("meta", ""),
+                            eyebrow = json.optString("eyebrow", "").ifBlank { "Dinner prep" },
+                            ingredients = strings("ingredients"),
+                            steps = strings("steps"))
+                    showRecipe(board, json.optInt("minutes", 0).coerceIn(0, 720))
+                    buildJsonObject {
+                      put("set", true)
+                      put("title", board.title)
+                      put("ingredients", board.ingredients.size)
+                      put("steps", board.steps.size)
                     }
                   },
           ),
@@ -989,6 +1171,9 @@ class MuseController(private val context: Context) {
       put("announcements", s.announcements.size)
       put("printer_paired", printer.isPaired())
       s.printerReachable?.let { put("printer_reachable", it) }
+      put("recipe_showing", s.recipe != null)
+      put("night_enabled", s.nightEnabled)
+      put("night_asleep", s.nightAsleep)
     }
   }
 

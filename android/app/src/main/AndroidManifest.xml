@@ -14,6 +14,7 @@
   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
@@ -50,6 +51,23 @@
         <action android:name="com.portal.wake.action.WAKE" />
       </intent-filter>
       <meta-data android:name="com.portal.wake.phrase" android:value="hey muse" />
+    </receiver>
+
+    <receiver android:name=".device.NightReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="dev.wobsoriano.museportal.NIGHT_OFF" />
+        <action android:name="dev.wobsoriano.museportal.NIGHT_ON" />
+      </intent-filter>
+    </receiver>
+
+    <receiver
+        android:name=".device.NightAdminReceiver"
+        android:permission="android.permission.BIND_DEVICE_ADMIN"
+        android:exported="true">
+      <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin" />
+      <intent-filter>
+        <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+      </intent-filter>
     </receiver>
   </application>
 </manifest>

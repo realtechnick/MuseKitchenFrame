@@ -61,20 +61,30 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.isSpecified
 import dev.wobsoriano.museportal.MuseState
+import dev.wobsoriano.museportal.RecipeBoard
 import dev.wobsoriano.museportal.ask.AskState
 import dev.wobsoriano.museportal.avatar.AvatarSet
+import dev.wobsoriano.museportal.device.DayTimeline
 import dev.wobsoriano.muse.voice.CallPhase
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 /** What the turn has to say: the question as heard and the answer so far, or why it failed. [live]: captions of a call, newest words last. */
@@ -147,6 +157,14 @@ fun HomeScreen(
           onToggleMute = onToggleMute,
           onCallToggle = { if (state.ask is AskState.Calling) onEndCall() else onStartCall() })
     }
+    if (state.nightAsleep) {
+      // The night window: a dead-black face that swallows taps. (With the force-lock grant
+      // the display itself is off and this never shows; without it, this is the darkness.)
+      Box(
+          Modifier.fillMaxSize()
+              .background(Color.Black)
+              .clickable(remember { MutableInteractionSource() }, indication = null) {})
+    }
   }
   if (showReplays && state.shownImage == null) {
     ReplayDialog(state, onDismiss = { showReplays = false }, onReplayEntry = { id ->
@@ -193,7 +211,7 @@ private fun HubContent(
   }
 }
 
-/** The wall clock, centered over the portrait: big time, the weekday larger, then month and day. */
+/** The wall clock, centered over the portrait: the day timeline, big time, weekday, then month and day. */
 @Composable
 private fun ClockBlock() {
   var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -204,12 +222,110 @@ private fun ClockBlock() {
     }
   }
   val time = remember(now) { SimpleDateFormat("h:mm", Locale.US).format(Date(now)) }
+  val ampm = remember(now) { SimpleDateFormat("a", Locale.US).format(Date(now)) }
   val day = remember(now) { SimpleDateFormat("EEEE", Locale.US).format(Date(now)) }
   val date = remember(now) { SimpleDateFormat("MMMM d", Locale.US).format(Date(now)) }
+  val nowMin =
+      remember(now) {
+        Calendar.getInstance().apply { timeInMillis = now }.let { it.get(Calendar.HOUR_OF_DAY) * 60 + it.get(Calendar.MINUTE) }
+      }
   Column(horizontalAlignment = Alignment.CenterHorizontally) {
-    Text(time, fontFamily = HubFont, fontWeight = FontWeight.Black, fontSize = 74.sp, color = Color.White)
+    DayTimelineBar(nowMin)
+    Spacer(Modifier.height(12.dp))
+    // The time owns the column's center; AM/PM hangs off its lower right and is not
+    // counted in the centering (Boss, 2026-11-02).
+    BoxWithConstraints(Modifier.fillMaxWidth().height(86.dp)) {
+      var timeW by remember(time) { mutableIntStateOf(0) }
+      val density = LocalDensity.current
+      Text(
+          time,
+          fontFamily = HubFont,
+          fontWeight = FontWeight.Black,
+          fontSize = 74.sp,
+          color = Color.White,
+          modifier = Modifier.align(Alignment.Center).onSizeChanged { timeW = it.width })
+      if (timeW > 0) {
+        val xPx = with(density) { maxWidth.toPx() } / 2f + timeW / 2f + with(density) { 10.dp.toPx() }
+        val yPx = with(density) { 60.dp.toPx() }
+        Text(
+            ampm,
+            fontFamily = HubFont,
+            fontWeight = FontWeight.Black,
+            fontSize = 20.sp,
+            color = GoldLine,
+            modifier = Modifier.offset { IntOffset(xPx.roundToInt(), yPx.roundToInt()) })
+      }
+    }
     Text(day, fontFamily = HubFont, fontWeight = FontWeight.Black, fontSize = 36.sp, color = WarmWhite)
     Text(date, fontFamily = HubFont, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = WarmWhite.copy(alpha = 0.8f))
+  }
+}
+
+/**
+ * The day in one line (Boss, 2026-11-02): 9 AM at the left, 11 PM at the right, the elapsed
+ * stretch in gold, ticks where the day's named stretches begin, a marker for now — and the
+ * current stretch's label reading out above its own stretch of the bar. Other stretches'
+ * labels stay hidden until their time comes.
+ */
+@Composable
+private fun DayTimelineBar(nowMin: Int) {
+  val segment = DayTimeline.segmentAt(nowMin)
+  Column(Modifier.fillMaxWidth()) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(30.dp)) {
+      if (segment != null) {
+        var labelW by remember(segment.label) { mutableIntStateOf(0) }
+        val density = LocalDensity.current
+        val widthPx = with(density) { maxWidth.toPx() }
+        val centerFrac = (DayTimeline.fractionAt(segment.startMin) + DayTimeline.fractionAt(DayTimeline.endOf(segment))) / 2f
+        val xPx = (widthPx * centerFrac - labelW / 2f).coerceIn(0f, (widthPx - labelW).coerceAtLeast(0f))
+        Text(
+            segment.label,
+            fontFamily = HubFont,
+            fontWeight = FontWeight.Bold,
+            fontSize = 19.sp,
+            color = GoldLine,
+            maxLines = 1,
+            modifier =
+                Modifier.offset { IntOffset(xPx.roundToInt(), 2) }
+                    .alpha(if (labelW > 0) 1f else 0f)
+                    .onSizeChanged { labelW = it.width })
+      }
+    }
+    Spacer(Modifier.height(2.dp))
+    BoxWithConstraints(Modifier.fillMaxWidth().height(16.dp)) {
+      val density = LocalDensity.current
+      val widthPx = with(density) { maxWidth.toPx() }
+      val nowFrac = DayTimeline.fractionAt(nowMin)
+      Box(
+          Modifier.fillMaxWidth()
+              .height(6.dp)
+              .align(Alignment.Center)
+              .clip(RoundedCornerShape(3.dp))
+              .background(WarmWhite.copy(alpha = 0.18f)))
+      Box(
+          Modifier.width(maxWidth * nowFrac)
+              .height(6.dp)
+              .align(Alignment.CenterStart)
+              .clip(RoundedCornerShape(3.dp))
+              .background(GoldLine))
+      DayTimeline.SEGMENTS.drop(1).forEach { seg ->
+        Box(
+            Modifier.offset { IntOffset((widthPx * DayTimeline.fractionAt(seg)).roundToInt() - 1, 2) }
+                .width(2.dp)
+                .height(12.dp)
+                .background(WarmWhite.copy(alpha = 0.65f)))
+      }
+      Box(
+          Modifier.offset { IntOffset((widthPx * nowFrac).roundToInt() - 8, 0) }
+              .size(16.dp)
+              .clip(CircleShape)
+              .background(GoldLine)
+              .border(3.dp, BronzeBottom, CircleShape))
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+      Text("9 AM", fontFamily = HubFont, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = WarmWhite.copy(alpha = 0.55f))
+      Text("11 PM", fontFamily = HubFont, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = WarmWhite.copy(alpha = 0.55f))
+    }
   }
 }
 
@@ -277,13 +393,18 @@ private fun StatusPanel(state: MuseState, modifier: Modifier) {
     val turn = state.ask.turnText
     val inTurn =
         turn != null || state.ask is AskState.Calling || state.ask is AskState.Recording || state.ask is AskState.Sending
-    if (inTurn) PanelCaptions(state, turn) else StatusContent(state)
+    when {
+      inTurn -> PanelCaptions(state, turn)
+      state.recipe != null -> RecipeContent(state.recipe)
+      else -> StatusContent(state)
+    }
   }
 }
 
 @Composable
 private fun StatusContent(state: MuseState) {
-  Column(Modifier.fillMaxSize().padding(top = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
+  val body = state.hubBody.ifBlank { defaultStatusBody(state) }
+  AutoFitColumn(resetKey = state.hubHeader + "\n" + body) {
     if (state.hubHeader.isNotBlank()) {
       Text(
           state.hubHeader.uppercase(),
@@ -297,33 +418,213 @@ private fun StatusContent(state: MuseState) {
       Box(Modifier.width(130.dp).height(3.dp).background(GoldLine))
       Spacer(Modifier.height(22.dp))
     }
-    // The body is plain lines, with one piece of markup: a line starting with "# " is a
-    // headline — gold, black weight, a touch larger. Everything else is body text, blank
-    // lines are breathing room. (Boss asked for colored headlines, 2026-11-02.)
-    val body = state.hubBody.ifBlank { defaultStatusBody(state) }
-    body.split("\n").forEach { line ->
-      when {
-        line.isBlank() -> Spacer(Modifier.height(14.dp))
-        line.startsWith("# ") ->
+    BoardLines(body)
+  }
+}
+
+/**
+ * The dynamic board (Boss, 2026-11-02): the status body is typeset, not merely printed —
+ * lines carry a light markup (BoardMarkup) for headlines, heroes, quotes, footnotes,
+ * dividers, tones and left-set lines, and the whole board steps its type down until it
+ * fits the panel. Nothing scrolls; a long board simply sets itself a little smaller.
+ */
+@Composable
+private fun AutoFitColumn(resetKey: Any?, content: @Composable () -> Unit) {
+  val scales = listOf(1f, 0.92f, 0.85f, 0.78f, 0.72f, 0.66f)
+  var step by remember(resetKey) { mutableIntStateOf(0) }
+  BoxWithConstraints(Modifier.fillMaxSize().padding(top = 10.dp)) {
+    val availPx = with(LocalDensity.current) { maxHeight.toPx() }
+    CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = scales[step])) {
+      Column(
+          Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged { size ->
+            if (size.height > availPx + 2 && step < scales.lastIndex) step++
+          },
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.Top) {
+            content()
+          }
+    }
+  }
+}
+
+@Composable
+private fun BoardLines(body: String) {
+  BoardMarkup.parse(body).forEach { line ->
+    when {
+      line.kind == BoardKind.Divider -> {
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.width(130.dp).height(3.dp).background(GoldLine.copy(alpha = 0.8f)))
+        Spacer(Modifier.height(10.dp))
+      }
+      line.text == null -> Spacer(Modifier.height(14.dp))
+      else -> BoardText(line)
+    }
+  }
+}
+
+@Composable
+private fun BoardText(line: BoardLine) {
+  val text = line.text ?: return
+  val color =
+      when (line.tone) {
+        BoardTone.Normal -> WarmWhite
+        BoardTone.Gold -> GoldLine
+        BoardTone.Dim -> WarmWhite.copy(alpha = 0.62f)
+        BoardTone.Green -> Palette.Good
+        BoardTone.Blue -> PrinterBlue
+        BoardTone.Red -> Palette.Bad
+      }
+  val align = if (line.align == BoardAlign.Left) TextAlign.Left else TextAlign.Center
+  val modifier = if (line.align == BoardAlign.Left) Modifier.fillMaxWidth() else Modifier
+  when (line.kind) {
+    BoardKind.Hero ->
+        Text(
+            text.uppercase(),
+            fontFamily = HubFont,
+            fontWeight = FontWeight.Black,
+            fontSize = 40.sp,
+            lineHeight = 47.sp,
+            letterSpacing = 2.sp,
+            color = color,
+            textAlign = align,
+            modifier = modifier)
+    BoardKind.Headline ->
+        Text(
+            text.uppercase(),
+            fontFamily = HubFont,
+            fontWeight = FontWeight.Black,
+            fontSize = 30.sp,
+            lineHeight = 36.sp,
+            letterSpacing = 3.sp,
+            color = color,
+            textAlign = align,
+            modifier = modifier)
+    BoardKind.Quote ->
+        Text(
+            text,
+            fontFamily = HubFont,
+            fontSize = 24.sp,
+            lineHeight = 35.sp,
+            letterSpacing = 0.5.sp,
+            color = color,
+            textAlign = align,
+            modifier = modifier)
+    BoardKind.Footnote ->
+        Text(
+            text,
+            fontFamily = HubFont,
+            fontSize = 20.sp,
+            lineHeight = 29.sp,
+            letterSpacing = 0.5.sp,
+            color = color,
+            textAlign = align,
+            modifier = modifier)
+    else ->
+        Text(
+            text,
+            fontFamily = HubFont,
+            fontSize = 26.sp,
+            lineHeight = 39.sp,
+            letterSpacing = 0.8.sp,
+            color = color,
+            textAlign = align,
+            modifier = modifier)
+  }
+}
+
+/**
+ * The recipe card (Boss, 2026-11-02): the panel as a recipe template — a centered title
+ * block, ingredients in two columns, numbered steps — auto-fitted like the board, so a
+ * whole recipe is on one screen with no scrolling while dinner gets made.
+ */
+@Composable
+private fun RecipeContent(recipe: RecipeBoard) {
+  AutoFitColumn(resetKey = recipe.title + recipe.ingredients.size + recipe.steps.size) {
+    Text(
+        recipe.eyebrow.uppercase(),
+        fontFamily = HubFont,
+        fontWeight = FontWeight.Black,
+        fontSize = 19.sp,
+        letterSpacing = 3.sp,
+        color = GoldLine,
+        textAlign = TextAlign.Center)
+    Spacer(Modifier.height(8.dp))
+    Text(
+        recipe.title,
+        fontFamily = HubFont,
+        fontWeight = FontWeight.Black,
+        fontSize = 44.sp,
+        lineHeight = 50.sp,
+        color = WarmWhite,
+        textAlign = TextAlign.Center)
+    if (recipe.meta.isNotBlank()) {
+      Spacer(Modifier.height(6.dp))
+      Text(
+          recipe.meta,
+          fontFamily = HubFont,
+          fontWeight = FontWeight.Bold,
+          fontSize = 21.sp,
+          color = WarmWhite.copy(alpha = 0.7f),
+          textAlign = TextAlign.Center)
+    }
+    Spacer(Modifier.height(16.dp))
+    Box(Modifier.fillMaxWidth().height(2.dp).background(GoldLine.copy(alpha = 0.35f)))
+    Spacer(Modifier.height(18.dp))
+    if (recipe.ingredients.isNotEmpty()) {
+      RecipeSectionLabel("Ingredients")
+      Spacer(Modifier.height(10.dp))
+      val half = (recipe.ingredients.size + 1) / 2
+      Row(Modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+          recipe.ingredients.take(half).forEach { IngredientRow(it) }
+        }
+        Spacer(Modifier.width(28.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+          recipe.ingredients.drop(half).forEach { IngredientRow(it) }
+        }
+      }
+      Spacer(Modifier.height(20.dp))
+    }
+    if (recipe.steps.isNotEmpty()) {
+      RecipeSectionLabel("Steps")
+      Spacer(Modifier.height(10.dp))
+      Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        recipe.steps.forEachIndexed { i, step ->
+          Row(Modifier.fillMaxWidth()) {
             Text(
-                line.removePrefix("# ").uppercase(),
+                "${i + 1}.",
                 fontFamily = HubFont,
                 fontWeight = FontWeight.Black,
-                fontSize = 30.sp,
-                lineHeight = 36.sp,
-                letterSpacing = 3.sp,
+                fontSize = 21.sp,
                 color = GoldLine,
-                textAlign = TextAlign.Center)
-        else ->
-            Text(
-                line,
-                fontFamily = HubFont,
-                fontSize = 26.sp,
-                lineHeight = 39.sp,
-                color = WarmWhite,
-                textAlign = TextAlign.Center)
+                modifier = Modifier.width(36.dp))
+            Text(step, fontFamily = HubFont, fontSize = 21.sp, lineHeight = 29.sp, color = WarmWhite, modifier = Modifier.weight(1f))
+          }
+        }
       }
     }
+  }
+}
+
+@Composable
+private fun RecipeSectionLabel(text: String) {
+  Text(
+      text.uppercase(),
+      fontFamily = HubFont,
+      fontWeight = FontWeight.Black,
+      fontSize = 19.sp,
+      letterSpacing = 3.sp,
+      color = GoldLine,
+      textAlign = TextAlign.Left,
+      modifier = Modifier.fillMaxWidth())
+}
+
+@Composable
+private fun IngredientRow(item: String) {
+  Row {
+    Text("•", fontFamily = HubFont, fontWeight = FontWeight.Bold, fontSize = 21.sp, color = GoldLine)
+    Spacer(Modifier.width(10.dp))
+    Text(item, fontFamily = HubFont, fontSize = 21.sp, lineHeight = 28.sp, color = WarmWhite)
   }
 }
 

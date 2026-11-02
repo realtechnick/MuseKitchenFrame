@@ -60,6 +60,11 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // A picture frame keeps its own screen on (the night schedule lets it go at night),
+    // and the morning wake must be able to light it over the lock screen.
+    window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    setTurnScreenOn(true)
+    setShowWhenLocked(true)
     hideSystemBars()
     MuseService.start(this)
     applyExtras(intent)
@@ -152,6 +157,23 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  /** Asks for the force-lock grant, the night schedule's one permission: turning the display off. */
+  private fun requestNightAdmin() {
+    try {
+      val intent =
+          Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+              .putExtra(
+                  android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN,
+                  dev.wobsoriano.museportal.device.NightSchedule.adminComponent(this))
+              .putExtra(
+                  android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                  "So the frame can turn its screen off at night and rest until morning. This grants only the power to lock the screen — nothing else.")
+      startActivity(intent)
+    } catch (e: ActivityNotFoundException) {
+      Toast.makeText(this, "This device has no setting for that", Toast.LENGTH_LONG).show()
+    }
+  }
+
   private val setupActions =
       object : SetupActions {
         override fun saveToken(token: String) = muse.saveToken(token)
@@ -176,6 +198,14 @@ class MainActivity : ComponentActivity() {
         override fun setKeepListening(on: Boolean) = muse.setKeepListening(on)
 
         override fun setConversationMode(on: Boolean) = muse.setConversationMode(on)
+
+        override fun setNightEnabled(on: Boolean) = muse.setNightEnabled(on)
+
+        override fun setNightStartMin(min: Int) = muse.setNightStartMin(min)
+
+        override fun setNightEndMin(min: Int) = muse.setNightEndMin(min)
+
+        override fun requestNightAdmin() = this@MainActivity.requestNightAdmin()
 
         override fun requestOverlay() = this@MainActivity.requestOverlay()
 

@@ -59,6 +59,14 @@ interface SettingsActions {
 
   fun setConversationMode(on: Boolean)
 
+  fun setNightEnabled(on: Boolean)
+
+  fun setNightStartMin(min: Int)
+
+  fun setNightEndMin(min: Int)
+
+  fun requestNightAdmin()
+
   fun requestOverlay()
 
   fun setVoice(name: String?, rate: Float)
@@ -111,6 +119,7 @@ fun SettingsScreen(state: MuseState, canOverlay: Boolean, avatar: AvatarLoad, av
             }
             Section("Voice", "How Muse sounds when it answers.") { VoiceSettings(state, actions) }
             Section("Device", "How this Portal shows up in Muse.") { DeviceSettings(state, actions) }
+            Section("Screen", "The frame keeps its screen on by day. These are its nights.") { ScreenSettings(state, actions) }
             Section("Printer", "The Nelko PM230 paired to this tablet, for reminders and recipes on paper.") { PrinterSettings(state, actions) }
             Section("About", null) { About(state, avatar, avatarDir, actions) }
           }
@@ -253,6 +262,109 @@ private fun DeviceSettings(state: MuseState, actions: SettingsActions) {
         dismissButton = { Link("Cancel", { confirmUnpair = false }) },
         containerColor = Palette.Raised)
   }
+}
+
+/** The night schedule: off late, on in the morning, with the one grant it needs and its one known enemy. */
+@Composable
+private fun ScreenSettings(state: MuseState, actions: SettingsActions) {
+  var editing by remember { mutableStateOf(false) }
+  SwitchRow(
+      "Night schedule",
+      "The screen turns off at night and comes back on its own in the morning.",
+      state.nightEnabled,
+      actions::setNightEnabled)
+  if (state.nightEnabled) {
+    Divider()
+    Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).clickable { editing = true }, verticalAlignment = Alignment.CenterVertically) {
+      Column(Modifier.weight(1f)) {
+        Text("Off · on", style = MaterialTheme.typography.titleLarge)
+        Text(
+            "${formatMinute(state.nightStartMin)} off · ${formatMinute(state.nightEndMin)} back on",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Palette.Dim)
+      }
+      Text("Change", style = MaterialTheme.typography.labelLarge, color = Palette.Accent)
+    }
+    if (!state.nightAdminActive) {
+      Divider()
+      Text(
+          "For a true screen-off — not just a black screen — Android needs one grant: permission for this app to lock the screen. Without it the frame only goes black.",
+          style = MaterialTheme.typography.bodyLarge,
+          color = Palette.Dim)
+      Pill("Allow screen-off", actions::requestNightAdmin, primary = false)
+    }
+    if (state.stayAwakeOn) {
+      Divider()
+      Text(
+          "Heads up: the developer option “Stay awake” is on. It outranks the schedule and would relight the screen at night — turn it off in Developer options for the schedule to hold.",
+          style = MaterialTheme.typography.bodyLarge,
+          color = Palette.Warn)
+    }
+  }
+  if (editing) {
+    var startText by remember { mutableStateOf(minuteText(state.nightStartMin)) }
+    var endText by remember { mutableStateOf(minuteText(state.nightEndMin)) }
+    var error by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { editing = false },
+        title = { Text("Night hours", style = MaterialTheme.typography.headlineMedium) },
+        text = {
+          Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("24-hour times, like 23:59 and 08:00.", style = MaterialTheme.typography.bodyMedium, color = Palette.Dim)
+            OutlinedTextField(
+                value = startText,
+                onValueChange = { startText = it.take(5); error = false },
+                label = { Text("Screen off at") },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Palette.Accent, unfocusedBorderColor = Palette.Line))
+            OutlinedTextField(
+                value = endText,
+                onValueChange = { endText = it.take(5); error = false },
+                label = { Text("Screen back on at") },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Palette.Accent, unfocusedBorderColor = Palette.Line))
+            if (error) Text("That doesn't parse — use HH:MM, like 23:59.", style = MaterialTheme.typography.bodyMedium, color = Palette.Bad)
+          }
+        },
+        confirmButton = {
+          Pill("Save", {
+            val s = parseMinute(startText)
+            val e = parseMinute(endText)
+            if (s == null || e == null) {
+              error = true
+            } else {
+              actions.setNightStartMin(s)
+              actions.setNightEndMin(e)
+              editing = false
+            }
+          }, primary = false)
+        },
+        dismissButton = { Link("Cancel", { editing = false }) },
+        containerColor = Palette.Raised)
+  }
+}
+
+private fun minuteText(min: Int): String = "%02d:%02d".format(min / 60, min % 60)
+
+private fun formatMinute(min: Int): String {
+  val h24 = min / 60
+  val m = min % 60
+  val ampm = if (h24 < 12) "AM" else "PM"
+  val h12 = when {
+    h24 == 0 -> 12
+    h24 > 12 -> h24 - 12
+    else -> h24
+  }
+  return "%d:%02d %s".format(h12, m, ampm)
+}
+
+private fun parseMinute(text: String): Int? {
+  val parts = text.trim().split(":")
+  if (parts.size != 2) return null
+  val h = parts[0].toIntOrNull() ?: return null
+  val m = parts[1].toIntOrNull() ?: return null
+  if (h !in 0..23 || m !in 0..59) return null
+  return h * 60 + m
 }
 
 @Composable

@@ -65,6 +65,9 @@ class MuseService : Service() {
 
 class BootReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
-    if (intent.action == Intent.ACTION_BOOT_COMPLETED) MuseService.start(context)
+    if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+      MuseService.start(context)
+      dev.wobsoriano.museportal.device.NightSchedule.armAll(context)
+    }
   }
 }

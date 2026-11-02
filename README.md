@@ -53,7 +53,8 @@ The frame registers with Muse as a gadget and answers these commands:
 | `device.health` | Connection, pairing, battery, uptime, printer state |
 | `display.draw_url` | Show an image full-screen until dismissed |
 | `display.clear` | Dismiss the pushed image |
-| `display.set_status` | Set the hub status panel's header and body |
+| `display.set_status` | Set the hub status panel's header and body (light layout markup) |
+| `display.set_recipe` | Show a recipe card on the panel: title, two-column ingredients, numbered steps |
 | `audio.play_url` / `audio.stop` | Play / stop audio through the speakers |
 | `speaker.speak` | Speak text with the tablet's TTS voice |
 | `voice.ask` | Ask Muse a question; the answer shows and is spoken |
@@ -63,7 +64,7 @@ The frame registers with Muse as a gadget and answers these commands:
 ## Install
 
 Every build is published as a
-[GitHub Release](https://github.com/realtechnick/portal-muse/releases):
+[GitHub Release](https://github.com/realtechnick/MuseKitchenFrame/releases):
 download `portal-muse-gadget-vX.Y.Z.apk` and install it on the tablet.
 All builds are signed with the same key, so updates install in place —
 pairing and settings survive. Then open the app, paste an SDK token from
