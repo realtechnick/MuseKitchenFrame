@@ -187,9 +187,9 @@ private fun HubContent(
   Row(Modifier.fillMaxSize().padding(36.dp)) {
     Column(Modifier.weight(0.28f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
       ClockBlock()
-      Spacer(Modifier.height(22.dp))
+      Spacer(Modifier.height(16.dp))
       AvatarFrame(state, avatar, onTap)
-      Spacer(Modifier.height(18.dp))
+      Spacer(Modifier.height(12.dp))
       DeviceStatus(state)
       val left = state.recordingLeftS
       if (left != null) {
@@ -231,7 +231,7 @@ private fun ClockBlock() {
       }
   Column(horizontalAlignment = Alignment.CenterHorizontally) {
     DayTimelineBar(nowMin)
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(5.dp))
     // The time owns the column's center; AM/PM hangs off its lower right and is not
     // counted in the centering (Boss, 2026-11-02).
     BoxWithConstraints(Modifier.fillMaxWidth().height(86.dp)) {
@@ -271,7 +271,7 @@ private fun ClockBlock() {
 private fun DayTimelineBar(nowMin: Int) {
   val segment = DayTimeline.segmentAt(nowMin)
   Column(Modifier.fillMaxWidth()) {
-    BoxWithConstraints(Modifier.fillMaxWidth().height(30.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(27.dp)) {
       if (segment != null) {
         var labelW by remember(segment.label) { mutableIntStateOf(0) }
         val density = LocalDensity.current
@@ -333,7 +333,7 @@ private fun DayTimelineBar(nowMin: Int) {
 @Composable
 private fun AvatarFrame(state: MuseState, avatar: AvatarSet?, onTap: () -> Unit) {
   val dim by animateFloatAsState(if (state.mood == Mood.Offline) 0.45f else 1f, tween(600), label = "offline")
-  BoxWithConstraints(Modifier.fillMaxWidth()) {
+  BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
     val side = maxWidth
     Box(
         Modifier.size(side)
@@ -357,7 +357,7 @@ private val PrinterBlue = Color(0xFF60A5FA)
  */
 @Composable
 private fun DeviceStatus(state: MuseState) {
-  Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+  Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     val online = state.online
     val dot by animateColorAsState(if (online) Palette.Good else Palette.Bad, label = "muse dot")
     StatusRow(dot, "Muse Frame · ${state.connectionLabel}", if (online) WarmWhite.copy(alpha = 0.8f) else Palette.Bad)
