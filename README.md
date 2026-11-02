@@ -1,118 +1,89 @@
-# Muse for Portal
+# Muse Kitchen Frame
 
-Meta's Muse on a Meta Portal (first generation, Android 9), as a sideloaded Android app. No root:
-Portal's bootloader stays locked, and Meta's own ADB support is all it needs.
+**A kitchen-tablet hub for Muse.** Muse Kitchen Frame turns an ordinary Android
+tablet into a Muse gadget: it sits in a picture frame on the kitchen counter,
+always on, showing the time and the day's status — and it takes announcements,
+answers questions out loud, holds live voice calls, and prints to a thermal
+label printer. It is a personal project, built with Muse, and it has long
+since outgrown the app it was forked from.
 
-### Screenshots
+The frame is a Samsung Galaxy Tab A9+ (SM-X210, Android 16). Nothing about the
+design is Portal-specific any more: pairing uses the standard Bluetooth GATT
+flow, so it works on modern Android.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/img/home-ready.png" alt="Home screen with Muse waiting"><br><sub><b>Home</b>: Muse waits for "Hey Muse" or a tap</sub></td>
-    <td width="50%"><img src="docs/img/home-answered.png" alt="Home screen with an answer"><br><sub><b>Answer</b>: the question small, Muse's answer under it, spoken aloud</sub></td>
-  </tr>
-  <tr>
-    <td colspan="2"><img src="docs/img/overlay.png" alt="Muse bar over Immortal's home screen"><br><sub><b>Anywhere</b>: say "Hey Muse" from another app and a bar shows the turn over it</sub></td>
-  </tr>
-</table>
+## What it does
 
-#### Setting up
+**The hub (home screen)**
+- Dark bronze-gold home screen: live clock and date, Muse's framed portrait,
+  and a status panel that Muse updates through the day — upcoming events,
+  lunch and dinner plans, notes, a dad joke when there's nothing better.
+- While a question, a spoken answer, or a call is live, the panel shows the
+  turn's captions instead: pages that hold until the voice reaches the last
+  word, with the spoken word lit up.
+- Announcements still take the whole screen when they arrive, then the hub
+  comes back.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/img/setup-1-token.png" alt="Setup step 1: Muse token"><br><sub><b>1. Token</b>: paste the SDK token from gadgets.muse.ai</sub></td>
-    <td width="50%"><img src="docs/img/setup-2-name.png" alt="Setup step 2: name"><br><sub><b>2. Name</b>: how this Portal shows up in the Muse app</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/img/setup-3-pair.png" alt="Setup step 3: pairing"><br><sub><b>3. Pair</b>: add the Portal from the Muse phone app over Bluetooth</sub></td>
-    <td width="50%"><img src="docs/img/setup-4-heymuse.png" alt="Setup step 4: Hey Muse"><br><sub><b>4. Hey Muse</b>: turn on hands-free listening</sub></td>
-  </tr>
-</table>
+**Voice**
+- "Hey Muse" wake word (offline, Vosk) for hands-free questions.
+- Voice notes up to 18 seconds, with a live countdown — the cap is the
+  service's real ceiling, found by experiment.
+- Realtime voice calls from the green phone button, with a call microphone
+  tuned for talking across a kitchen.
+- Ask by tapping the portrait; answers are captioned and spoken.
 
-#### Settings
+**Announcements**
+- Full-screen cards (rendered at the panel's native 1920×1200) with spoken
+  audio, a replay history for the last five, and a persistent mute.
 
-<table>
-  <tr>
-    <td width="33%"><img src="docs/img/settings-1.png" alt="Settings: Hey Muse and voice"><br><sub><b>Hey Muse and voice</b></sub></td>
-    <td width="33%"><img src="docs/img/settings-2.png" alt="Settings: speaking rate and device"><br><sub><b>Speaking rate and device</b></sub></td>
-    <td width="33%"><img src="docs/img/settings-3.png" alt="Settings: token, unpair and about"><br><sub><b>Token, unpair and about</b></sub></td>
-  </tr>
-</table>
+**Printing**
+- A Nelko PM230 pocket thermal printer, paired to the tablet, prints on
+  command: urgent-reminder slips, recipes, labels — zero touch. The printer
+  speaks Bluetooth Classic SPP and TSPL; the implementation is byte-exact
+  against captured jobs from the official app, verified by golden tests.
+  (Long prints need patience with Bluetooth's drain timing — the app holds
+  the link until the job has truly left the tablet. That lesson was paid for
+  in wasted paper, like all the best ones.)
 
-- `android/muse` is the Muse library, plain Kotlin with no Android code, so its tests run on a PC. It
-  holds the Muse client and the gadget pairing protocol, ported to Kotlin from the Go core of
-  [hey-muse](https://github.com/wobsoriano/hey-muse), the TECHO5 fork that runs Muse on Echo devices.
-  `MuseCore` is the app's way in: config, pairing, BLE events and questions go in, and the
-  connection, pairing and reply status come out.
-- `android/app` is the app: the Bluetooth LE side of pairing, the microphone, the "Hey Muse"
-  listener, playback and the screen. It runs `MuseCore` in its own process.
-- `android/probe` is a separate app that reports what a Portal allows on day one.
-- `android/wake` is the "Hey Muse" rule for Vosk: the grammar to decode with and how to decide a
-  result. `tools/wakeeval` applies the same rule to a recording on the PC.
-- `third_party/pico` is the SVOX Pico speech engine.
+## Gadget commands
 
-## Status
+The frame registers with Muse as a gadget and answers these commands:
 
-Tap Muse to ask, or turn on **Hey Muse** to ask hands-free. The first time it is turned on, the
-app downloads Vosk's `vosk-model-small-en-us-0.15` (41 MB, checked against a pinned SHA-256) into
-its files directory. The listener runs in the app's foreground service and starts at boot when it is
-on. It lets go of the microphone while another app records. If
-[portal-wake](https://github.com/rudysev/portal-wake) is installed, the app does not listen itself:
-it registers "hey muse" with portal-wake and answers its hand-offs.
+| Command | What it does |
+| --- | --- |
+| `device.health` | Connection, pairing, battery, uptime, printer state |
+| `display.draw_url` | Show an image full-screen until dismissed |
+| `display.clear` | Dismiss the pushed image |
+| `display.set_status` | Set the hub status panel's header and body |
+| `audio.play_url` / `audio.stop` | Play / stop audio through the speakers |
+| `speaker.speak` | Speak text with the tablet's TTS voice |
+| `voice.ask` | Ask Muse a question; the answer shows and is spoken |
+| `printer.print` | Print a text slip on the PM230 (title, alignment, density, copies) |
+| `printer.probe` | Check the printer is reachable, printing nothing |
 
-## Build
+## Install
 
-You need JDK 21 and the Android SDK (platform 35).
+Every build is published as a
+[GitHub Release](https://github.com/realtechnick/portal-muse/releases):
+download `portal-muse-gadget-vX.Y.Z.apk` and install it on the tablet.
+All builds are signed with the same key, so updates install in place —
+pairing and settings survive. Then open the app, paste an SDK token from
+gadgets.muse.ai, name the frame, and pair it from the Muse app.
 
-```sh
-android/gradlew -p android :muse:test :wake:test :app:testDebugUnitTest :app:assembleDebug :probe:assembleDebug
-```
+## Building
 
-`:muse:test` includes the cross-language check: the Noise sessions, frames, chunks, pairing
-conversations and state files that the Go core wrote are committed under
-`android/muse/src/test/resources/vectors`, and the Kotlin code has to reproduce them byte for byte.
-That folder's README says how they were made.
+GitHub Actions builds on every push to `main`: unit tests, then the app and
+probe APKs, signed with the persistent keystore, and a Release is published
+with the version's change notes. Local Android builds are not part of the
+workflow — CI is the build machine.
 
-## Install on a Portal
+## Lineage
 
-Turn on **Settings > Debug > ADB Enabled** on the Portal, connect it over USB-C and allow the
-computer. Then:
-
-```sh
-adb install -g android/probe/build/outputs/apk/debug/probe-debug.apk
-adb shell am start -n dev.wobsoriano.museportal.probe/.ProbeActivity
-adb logcat -s MuseProbe        # the day-one report
-adb push vosk-model-small-en-us-0.15 /sdcard/Android/data/dev.wobsoriano.museportal.probe/files/
-adb shell am start -n dev.wobsoriano.museportal.probe/.ProbeActivity -S --es only vosk   # two minutes of "Hey Muse" on Vosk
-adb install -g android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-To skip the download, copy in a model you already have (a debug build allows `run-as`):
-
-```sh
-adb push vosk-model-small-en-us-0.15 /data/local/tmp/
-adb shell run-as dev.wobsoriano.museportal cp -r /data/local/tmp/vosk-model-small-en-us-0.15 files/vosk-model-small-en-us-0.15.tmp
-adb shell run-as dev.wobsoriano.museportal mv files/vosk-model-small-en-us-0.15.tmp files/vosk-model-small-en-us-0.15
-adb shell am start -n dev.wobsoriano.museportal/.MainActivity --ez heyMuse true
-adb logcat -s MuseWake
-```
-
-The app keeps its pairing in `muse.json` in its files directory, in the format the Go core wrote,
-so a Portal paired by an earlier build stays paired.
-
-The Vosk check saves its audio as `files/vosk.wav`. `tools/wakeeval/eval.py` replays a WAV through the
-same rule on the PC and scores it against a file of attempt times.
-
-## Licences
-
-`android/muse` is a modified port of Meta's Muse Gadget SDK (Apache 2.0, see its `LICENSE`), by way
-of hey-muse's Go port. Its test vectors in `android/muse/src/test/resources/pairing` are Meta's
-(Apache 2.0). `third_party/pico` is SVOX Pico (Apache 2.0). What came from hey-muse is MIT:
-`LICENSE.hey-muse`, `NOTICE.hey-muse`.
-
-The character in `android/app/src/main/assets/muse-avatar/` and the launcher icons made from it are
-Meta's default Muse gadget avatar ("Jollybot") from
-[facebookincubator/muse-gadget-sdk](https://github.com/facebookincubator/muse-gadget-sdk). The SDK's
-Apache license does not cover it; it is included at the project owner's choice. Replacing the files
-in `assets/muse-avatar/` swaps it, and `tools/make-icon/MakeIcon.java` remakes the icons from the new
-`idle.png`. A set copied to the app's `files/muse-avatar/` on the device takes precedence over the
-built-in one.
+Forked from [wobsoriano/portal-muse](https://github.com/wobsoriano/portal-muse),
+which brought Muse to the Meta Portal; the gadget protocol core descends
+from Meta's gadget SDK by way of hey-muse's port. Everything above that
+layer — pairing on modern Android, the microphone and caption work, calls,
+the hub, the printer — is this project's own. The PM230 protocol was
+reverse-engineered by
+[an21p/nelko-pm230-driver](https://github.com/an21p/nelko-pm230-driver)
+(MIT); this app's TSPL implementation is a port of that work, fixtures and
+all. Standing on these shoulders is the whole point.
